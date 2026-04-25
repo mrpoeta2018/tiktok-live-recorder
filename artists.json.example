@@ -1,0 +1,15 @@
+{
+  "artists": [
+    {
+      "username": "nombre_usuario_tiktok",
+      "status": "offline",
+      "last_live": "",
+      "recording": false,
+      "files": 0,
+      "auto_record": true
+    }
+  ],
+  "output_folder": "C:\\Users\\TuUsuario\\TikTok_Lives",
+  "artist_name": "Tu Nombre Artístico",
+  "artist_genre": "Hip-Hop / Rap"
+}

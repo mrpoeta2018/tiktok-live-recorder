@@ -1,0 +1,117 @@
+╔══════════════════════════════════════════════════════════════╗
+║         TikTok Live Recorder + Procesador de Audio          ║
+║                     Guía de uso                             ║
+╚══════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PRIMERA VEZ — INSTALACIÓN (solo una vez)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  PASO 1 — Instalar Python (si no lo tenés)
+     • Ve a: https://python.org/downloads
+     • Descargá Python 3.12
+     • MUY IMPORTANTE: al instalar, marcá "Add Python to PATH"
+
+  PASO 2 — Ejecutar el instalador
+     • Doble click en: instalar.bat
+     • Espera que termine (puede tardar 5-10 minutos)
+     • Solo necesitas hacerlo una vez
+
+  PASO 3 — ¡Listo! Ya podés usar la app
+     • Doble click en: INICIAR.bat
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  USO DIARIO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  • Doble click en INICIAR.bat
+  • La app se abre sola
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  TAB 1 — MONITOR DE LIVES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. Escribí @usuario de TikTok y clickeá "+ Agregar"
+     (O copiá una URL de TikTok y se agrega automático)
+
+  2. Clickeá "▶ Iniciar Monitor"
+     La app revisa cada 60 segundos si alguien está en live
+
+  3. Cuando detecta un live → graba automáticamente
+     Los archivos se guardan en: C:\Users\TuUsuario\TikTok_Lives\
+
+  ÍCONOS:
+     ⚫ Offline — no está en live
+     🟡 Revisando...
+     🟢 En live (detectado)
+     🔴 Grabando ahora
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  TAB 2 — PROCESAR AUDIO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ① Elegí el archivo de audio a procesar
+     (puede ser el live grabado o cualquier MP3/WAV)
+
+  ② Marcá qué querés hacer:
+     ✂️  Detectar segmentos  → corta solo donde rapeas/cantás
+     🎤  Separar voz (IA)   → quita el beat del fondo (Demucs)
+     🎵  Mezclar con beat   → pone tu beat encima de la voz
+
+  ③ Si elegiste mezclar, seleccioná tu instrumental/beat
+
+  ④ Elegí dónde guardar los resultados
+
+  → Clickeá "▶ PROCESAR AUDIO"
+
+  RESULTADO — se crea una carpeta por sesión:
+     seg001_VOZ.mp3        ← tu voz limpia, lista
+     seg001_PROMPT.txt     ← prompt para crear el beat
+     seg002_VOZ.mp3
+     seg002_PROMPT.txt
+     ... (un par por cada segmento detectado)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  EL PROMPT DE BEAT — cómo usarlo
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Cada segmento genera un .txt con:
+     • BPM exacto de tu voz
+     • Tono/Key dominante
+     • Estilo y feel del ritmo
+     • Prompt listo para copiar/pegar en Suno o Udio
+     • Consejos técnicos para el productor
+
+  → Mandále al productor el .mp3 + el .txt del mismo segmento
+     Ejemplo: seg003_VOZ.mp3 + seg003_PROMPT.txt
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  CALIDAD DE SALIDA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  • Audio: 320kbps MP3 (máxima calidad)
+  • Masterización: -14 LUFS (estándar Spotify / Apple Music)
+  • Fade in/out automático (1.5 seg entrada, 3 seg salida)
+  • Listo para subir a plataformas
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PREGUNTAS FRECUENTES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ¿Cuánto tarda el procesamiento?
+     Depende del largo del audio:
+     • Detectar segmentos: 10-30 segundos
+     • Demucs (IA): ~8 minutos por segmento en CPU
+     • Mezcla final: 10-20 segundos
+
+  ¿La primera vez tarda más?
+     Sí, Demucs descarga su modelo de IA (~200MB).
+     De la segunda vez en adelante es igual de rápido.
+
+  ¿Cuántos artistas puedo monitorear?
+     Hasta 50 a la vez.
+
+  ¿Necesito internet para procesar?
+     No, el procesamiento es 100% local en tu PC.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
