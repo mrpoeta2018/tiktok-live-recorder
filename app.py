@@ -117,10 +117,11 @@ class App:
         self.proc_clean_temp = tk.BooleanVar(value=True)
 
         # Estado Emparejador Pro
-        self.match_voz_folder  = tk.StringVar()
-        self.match_beat_folder = tk.StringVar()
-        self.match_out_folder  = tk.StringVar(
-            value=os.path.join(os.path.expanduser("~"), "TikTok_Lives", "Mezclas"))
+        base_dir = os.path.join(os.path.expanduser("~"), "TikTok_Lives")
+        self.match_voz_folder  = tk.StringVar(value=os.path.join(base_dir, "Voces"))
+        self.match_beat_folder = tk.StringVar(value=os.path.join(base_dir, "Beats"))
+        self.match_out_folder  = tk.StringVar(value=os.path.join(base_dir, "Mezclas"))
+        self.mix_profile       = tk.StringVar(value="Normal")
         self.match_threshold   = tk.IntVar(value=55)
         self.match_voz_files   = []
         self.match_beat_files  = []
@@ -131,6 +132,13 @@ class App:
 
         self.load_config()
         self.build_ui()
+        
+        # Pre-cargar listas de voces y beats si las carpetas existen
+        if os.path.isdir(self.match_voz_folder.get()):
+            self._match_set_voz(self._match_load_folder(self.match_voz_folder.get()))
+        if os.path.isdir(self.match_beat_folder.get()):
+            self._match_set_beat(self._match_load_folder(self.match_beat_folder.get()))
+
         threading.Thread(target=self._clipboard_loop, daemon=True).start()
 
     # ────────────────────────────────────────────────────────
@@ -191,6 +199,9 @@ class App:
     #  TAB 1 — MONITOR
     # ════════════════════════════════════════════════════════
     def _build_monitor_tab(self, parent):
+        if not hasattr(self, 'auto_cut_mins'):
+            self.auto_cut_mins = tk.IntVar(value=30)
+            
         # Barra de controles
         ctrl = tk.Frame(parent, bg='#0f3460', pady=8)
         ctrl.pack(fill='x')
@@ -207,6 +218,12 @@ class App:
         self.mon_btn = self._btn(ctrl, "▶ Iniciar Monitor", self.toggle_monitoring, '#533483')
         self.mon_btn.pack(side='left', padx=3)
         self._btn(ctrl, "📁 Carpeta",      self.choose_mon_folder,'#0a3d62').pack(side='left', padx=3)
+
+        tk.Label(ctrl, text="✂️ Auto-corte:", fg='#a8a8b3', bg='#0f3460', font=('Arial', 8)).pack(side='left', padx=(10,0))
+        cb_cut = ttk.Combobox(ctrl, textvariable=self.auto_cut_mins, values=[15, 30, 45, 60, 120], width=4, state='readonly')
+        cb_cut.pack(side='left', padx=2)
+        cb_cut.bind("<<ComboboxSelected>>", lambda e: self.save_config())
+        tk.Label(ctrl, text="min", fg='#a8a8b3', bg='#0f3460', font=('Arial', 8)).pack(side='left')
 
         self.folder_lbl = tk.Label(ctrl, text=self.output_folder,
                                    fg='#a8a8b3', bg='#0f3460', font=('Arial', 8))
@@ -303,7 +320,7 @@ class App:
             if STREAMLINK:
                 out = os.path.join(self.output_folder, f"{username}_{ts}.ts")
                 cmd = STREAMLINK + ['--retry-max', '0', '--retry-open', '1',
-                                    '-o', out, url, 'best']
+                                    '-o', out, url, 'audio_only,worst']
             else:
                 out = os.path.join(self.output_folder, f"{username}_{ts}.mp3")
                 cmd = YTDLP + ['--no-warnings', '-x', '--audio-format', 'mp3',
@@ -423,8 +440,8 @@ class App:
                           command=lambda u=a['username']: self.stop_recording(u),
                           bg='#f5a623', fg='#1a1a2e', relief='flat', padx=6,
                           cursor='hand2').pack(side='left', padx=2)
-            elif is_live and not auto:
-                # En live modo manual: mostrar botón para grabar ahora
+            elif not auto:
+                # En modo manual: siempre mostrar botón para forzar grabar ahora
                 tk.Button(row, text="⏺ Grabar", font=('Arial', 8, 'bold'),
                           command=lambda u=a['username']: self.manual_record(u),
                           bg='#00dd66', fg='#0a1a0a', relief='flat', padx=6,
@@ -547,7 +564,16 @@ class App:
             self.root.after(0, lambda: self.mon_btn.config(text="▶ Iniciar Monitor", bg='#533483'))
 
     def _convert_ts(self, proc, ts_path, username):
-        proc.wait()
+        timeout_reached = False
+        try:
+            timeout_sec = self.auto_cut_mins.get() * 60
+            proc.wait(timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            timeout_reached = True
+            # Cortar de forma segura, esto dispara el _recheck_after_cut y arranca otro
+            self.root.after(0, lambda: self.stop_recording(username))
+            proc.wait() # Esperar a que muera para procesar
+            
         if not os.path.exists(ts_path) or os.path.getsize(ts_path) == 0: return
         mp3 = ts_path.replace('.ts', '.mp3')
         self.mon_log_write(f"🔄 Convirtiendo a MP3: @{username}...")
@@ -558,6 +584,13 @@ class App:
             self.mon_log_write(f"✅ MP3 listo: {os.path.basename(mp3)}")
         else:
             self.mon_log_write(f"⚠️ Conversión falló, guardado como .ts: @{username}")
+            
+        # Si NO hubo timeout (se cayó la conexión o terminó el live normal),
+        # disparamos el re-check en 5s para detectar falsas caídas rápido
+        if not timeout_reached:
+            artist = next((a for a in self.artists if a['username'] == username), None)
+            if artist and self.monitoring and artist.get('auto_record'):
+                threading.Thread(target=self._recheck_after_cut, args=(artist,), daemon=True).start()
 
     def choose_mon_folder(self):
         f = filedialog.askdirectory(title="Carpeta para lives")
@@ -667,11 +700,12 @@ class App:
                            activebackground='#0f3460', activeforeground='white',
                            font=('Arial',9)).pack(side='left', padx=5)
         tk.Label(row1, text="   ", bg='#0f3460').pack(side='left')
-        tk.Checkbutton(row1, text="✨ Masterización suave",
-                       variable=self.proc_gentle_master,
-                       fg='#a8d8a8', bg='#0f3460', selectcolor='#1a1a2e',
-                       font=('Arial',9), activebackground='#0f3460',
-                       activeforeground='white').pack(side='left', padx=4)
+        tk.Label(row1, text="🎛️ Perfil:", fg='#a8a8b3', bg='#0f3460',
+                 font=('Arial',9)).pack(side='left')
+        ttk.Combobox(row1, textvariable=self.mix_profile,
+                     values=['Normal','PRO (Estudio)','Masterizada (Radio)'],
+                     width=18, state='readonly', font=('Arial',8)
+                     ).pack(side='left', padx=4)
         tk.Label(row1, text="   ", bg='#0f3460').pack(side='left')
         tk.Checkbutton(row1, text="📝 Transcribir letra",
                        variable=self.proc_transcribe,
@@ -772,6 +806,7 @@ class App:
                                         selectbackground='#e94560', selectmode='extended')
         self.match_voz_lb.pack(fill='both', expand=True, padx=6, pady=(0,2))
         self.match_voz_lb.bind('<Delete>', lambda e: self._match_remove('voz'))
+        self.match_voz_lb.bind('<Double-1>', lambda e: self._open_audio_editor(self.match_voz_lb))
         self.match_voz_count = tk.Label(pv, text="0 archivos", fg='#a8a8b3',
                                          bg='#1a1a2e', font=('Arial',8))
         self.match_voz_count.pack(anchor='w', padx=6, pady=(0,4))
@@ -872,12 +907,16 @@ class App:
 
         tk.Label(act, text="  o mezclar:", fg='#a8a8b3', bg='#0f3460',
                  font=('Arial',9)).pack(side='left', padx=(6,0))
+        self._btn(act, "🎧 Pre-escucha", lambda: self.preview_batch_mix('listen'), '#008b8b',
+                  font=('Arial',9,'bold'), padx=6, pady=4).pack(side='left', padx=4)
         self._btn(act, "⚡ Top 5",   lambda: self.preview_batch_mix(5),    '#533483',
                   font=('Arial',9,'bold'), padx=6, pady=4).pack(side='left', padx=2)
         self._btn(act, "⚡ Top 10",  lambda: self.preview_batch_mix(10),   '#533483',
                   font=('Arial',9,'bold'), padx=6, pady=4).pack(side='left', padx=2)
         self._btn(act, "⚡ Seleccionados", lambda: self.preview_batch_mix(None), '#533483',
                   font=('Arial',9,'bold'), padx=6, pady=4).pack(side='left', padx=2)
+        self._btn(act, "🤖 IA Letra", lambda: subprocess.run(['cmd','/c','start','https://chatgpt.com']), '#533483', font=('Arial',9,'bold'), padx=6, pady=4).pack(side='left', padx=2)
+        self._btn(act, "🎨 IA Portada", lambda: subprocess.run(['cmd','/c','start','https://www.bing.com/images/create']), '#533483', font=('Arial',9,'bold'), padx=6, pady=4).pack(side='left', padx=2)
         self._btn(act, "⚡ Todos", lambda: self.preview_batch_mix('all'), '#1a6b3a',
                   font=('Arial',9,'bold'), padx=6, pady=4).pack(side='left', padx=2)
 
@@ -1081,6 +1120,7 @@ class App:
                     self.proc_log_write("   ⏬ Primera vez: descargando modelo IA (~200MB)...")
                 for i, seg in enumerate(segments):
                     label = f"seg{i+1:03d}"
+                    self.proc_log_write(f"   ⏳ Procesando {label} ({i+1}/{len(segments)})...")
                     vf = self._run_demucs(seg, session_dir)
                     if vf:
                         no_voc = vf.replace('vocals.wav', 'no_vocals.wav')
@@ -1499,25 +1539,53 @@ class App:
             zcr        = float(librosa.feature.zero_crossing_rate(y).mean())
 
             # ── Tempo feel ──
-            if bpm < 75:    tempo_feel = "muy lento, introspectivo, trap lento"
-            elif bpm < 95:  tempo_feel = "lento, relajado, lo-fi / chill trap"
-            elif bpm < 115: tempo_feel = "moderado, rap consciente / boom bap"
-            elif bpm < 135: tempo_feel = "rápido, energético, trap / drill"
-            elif bpm < 155: tempo_feel = "muy rápido, agresivo, drill / rage"
-            else:           tempo_feel = "extremadamente rápido, hyperpop / speedrap"
+            if bpm < 75:    
+                tempo_feel = "muy lento, introspectivo, trap lento"
+                ai_tempo = "very slow, introspective, ambient trap"
+            elif bpm < 95:  
+                tempo_feel = "lento, relajado, lo-fi / chill trap"
+                ai_tempo = "slow, chill, lo-fi hip hop, laid back"
+            elif bpm < 115: 
+                tempo_feel = "moderado, rap consciente / boom bap"
+                ai_tempo = "mid-tempo, boom bap, conscious hip hop"
+            elif bpm < 135: 
+                tempo_feel = "rápido, energético, trap / drill"
+                ai_tempo = "fast, energetic trap, drill"
+            elif bpm < 155: 
+                tempo_feel = "muy rápido, agresivo, drill / rage"
+                ai_tempo = "very fast, aggressive drill, rage beat"
+            else:           
+                tempo_feel = "extremadamente rápido, hyperpop / speedrap"
+                ai_tempo = "hyperpop, extremely fast, speed rap"
 
             # ── Energía feel ──
-            if energy_db < -30:   energy_feel = "suave, susurrado, íntimo"
-            elif energy_db < -20: energy_feel = "moderado, conversacional"
-            elif energy_db < -12: energy_feel = "potente, presencia vocal fuerte"
-            else:                 energy_feel = "muy potente, agresivo, en tu cara"
+            if energy_db < -30:   
+                energy_feel = "suave, susurrado, íntimo"
+                ai_energy = "soft, intimate, whispered, low energy"
+            elif energy_db < -20: 
+                energy_feel = "moderado, conversacional"
+                ai_energy = "moderate energy, conversational flow"
+            elif energy_db < -12: 
+                energy_feel = "potente, presencia vocal fuerte"
+                ai_energy = "powerful, strong vocal presence, high energy"
+            else:                 
+                energy_feel = "muy potente, agresivo, en tu cara"
+                ai_energy = "aggressive, very powerful, hard hitting"
 
             # ── Complejidad rítmica ──
             beat_strength = float(np.std(librosa.beat.beat_track(y=y, sr=sr, units='time')[1]))
-            if beat_strength < 0.1:   rhythm_feel = "muy estable, mecánico, cuantizado"
-            elif beat_strength < 0.3: rhythm_feel = "estable con leves variaciones naturales"
-            elif beat_strength < 0.6: rhythm_feel = "flexible, fluido, con swag"
-            else:                     rhythm_feel = "muy libre, off-beat intencional, experimental"
+            if beat_strength < 0.1:   
+                rhythm_feel = "muy estable, mecánico, cuantizado"
+                ai_rhythm = "quantized, mechanical rhythm, steady"
+            elif beat_strength < 0.3: 
+                rhythm_feel = "estable con leves variaciones naturales"
+                ai_rhythm = "steady with natural groove"
+            elif beat_strength < 0.6: 
+                rhythm_feel = "flexible, fluido, con swag"
+                ai_rhythm = "fluid rhythm, bouncy, bouncy flow"
+            else:                     
+                rhythm_feel = "muy libre, off-beat intencional, experimental"
+                ai_rhythm = "experimental rhythm, off-beat, free tempo"
 
             # ── Duración ──
             duration = librosa.get_duration(y=y, sr=sr)
@@ -1540,15 +1608,13 @@ class App:
    • Ritmo vocal     : {rhythm_feel}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  PROMPT LISTO PARA SUNO / UDIO / PRODUCTOR:
+  PROMPT LISTO PARA SUNO / UDIO (Copiar y pegar):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-"{tempo_feel.split(',')[0].strip()} hip-hop instrumental, {bpm:.0f} BPM, key of {key},
-{energy_feel} energy, {rhythm_feel} rhythm feel.
-Dark trap beat with heavy 808 bass, crispy hi-hats, punchy kicks.
-Melodic but aggressive. Perfect for Spanish rap/freestyle vocals.
-No lyrics, instrumental only.
-Professional mix, radio ready, 320kbps quality."
+"{ai_tempo}, {bpm:.0f} BPM, key of {key}, {ai_energy}, {ai_rhythm}, 
+dark trap beat, heavy 808 bass, crispy hi-hats, punchy kicks.
+Melodic but aggressive. Instrumental only, no vocals.
+Professional mix, radio ready."
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   CONSEJOS PARA EL BEAT:
@@ -1627,22 +1693,25 @@ Professional mix, radio ready, 320kbps quality."
             filters.append(f'atempo={r:.5f}')
         return ','.join(filters) if filters else ''
 
-    def _mix_with_beat(self, vocals_file, beat_file, output_mp3, log_fn=None):
+    def _mix_with_beat(self, vocals, beat, output_mp3, log_fn=None, preview_only=False, clone_voice=False, override_profile=None, harmony_voice=False, vol_voz_override=None, vol_beat_override=None, vol_clone_override=None, start_t=None, duration_t=None):
         """
-        PROTOCOLO DE MEZCLA INTELIGENTE:
-          1. Analiza BPM de voz y beat
-          2. Calcula el mejor ratio (1:1, 0.5x, 2x — el que menos stretching necesita)
-          3. Estira/comprime el BEAT para que encaje con la voz (la voz NO se toca)
-          4. Beat en loop si es corto, fade out si es largo — la VOZ manda la duración
-          5. Fades + masterización -14 LUFS (estándar Spotify/Apple Music/TikTok)
+        PROTOCOLO DE MEZCLA INTELIGENTE CON PERFILES (Normal, PRO, Masterizada).
         """
         _log = log_fn or self.proc_log_write
+
+        # Soporte backwards compatible por si se pasan rutas
+        if isinstance(vocals, str): vocals = {'file': vocals, 'bpm': None, 'key_idx': None}
+        if isinstance(beat, str): beat = {'file': beat, 'bpm': None, 'key_idx': None}
+        if isinstance(vocals, dict) and 'voz' in vocals:
+            beat = vocals['beat']; vocals = vocals['voz']
+            
+        vocals_file = vocals['file']
+        beat_file = beat['file']
 
         voz_dur  = self._get_duration(vocals_file)
         beat_dur = self._get_duration(beat_file)
         if voz_dur == 0 or beat_dur == 0:
-            _log(f"   ❌ Duración 0 — voz:{voz_dur:.1f}s beat:{beat_dur:.1f}s "
-                 f"({os.path.basename(vocals_file)} | {os.path.basename(beat_file)})")
+            _log(f"   ❌ Duración 0 — voz:{voz_dur:.1f}s beat:{beat_dur:.1f}s")
             return
 
         # ── PASO A: Análisis de BPM ───────────────────────────
@@ -1699,75 +1768,113 @@ Professional mix, radio ready, 320kbps quality."
             _log(f"   ✂️  Beat {beat_dur_ajustado:.1f}s > Voz {voz_dur:.1f}s → fade out")
 
         # ── PASO C: Construir filtros ──────────────────────────
-        # El beat entra por [0:a] con -stream_loop -1 (loop infinito en la entrada)
-        # así cubrimos tanto el caso de beat corto como el largo sin lógica extra.
-        # atempo (si aplica) va primero, luego volume, fades y trim.
-        beat_pre = f'[0:a]{atempo_str + "," if atempo_str else ""}'
+        profile = override_profile or (self.mix_profile.get() if hasattr(self, 'mix_profile') else 'Normal')
+        _log(f"   🎛️ Perfil activo: {profile}")
+        
+        pitch_filter = ''
+        if 'PRO' in profile or 'Masterizada' in profile:
+            if vocals.get('key_idx') is not None and beat.get('key_idx') is not None:
+                diff = (vocals['key_idx'] - beat['key_idx'])
+                if diff > 6: diff -= 12
+                elif diff < -6: diff += 12
+                if diff != 0:
+                    pitch_ratio = 2.0 ** (diff / 12.0)
+                    pitch_filter = f'rubberband=pitch={pitch_ratio:.4f},'
+                    _log(f"   🎵 Afinación: beat ajustado {diff:+d} semitonos")
 
-        # Volúmenes según preset de balance seleccionado
+        beat_pre = f'[0:a]{pitch_filter}{atempo_str + "," if atempo_str else ""}'
+
         _bal = getattr(self, 'mix_balance', None)
         _bal_val = _bal.get() if _bal else 'balanced'
-        if _bal_val == 'voz':
-            vol_beat, vol_voz = 0.42, 2.1      # voz muy por delante
-        elif _bal_val == 'beat':
-            vol_beat, vol_voz = 1.05, 1.0      # beat con más presencia
-        else:                                   # balanced (default)
-            vol_beat, vol_voz = 0.68, 1.55
+        if _bal_val == 'voz':      vol_beat, vol_voz = 0.42, 2.1
+        elif _bal_val == 'beat':   vol_beat, vol_voz = 1.05, 1.0
+        else:                      vol_beat, vol_voz = 0.68, 1.55
+        
+        if vol_voz_override is not None: vol_voz = vol_voz_override
+        if vol_beat_override is not None: vol_beat = vol_beat_override
+        vol_clone = vol_clone_override if vol_clone_override is not None else 0.3
 
-        # Masterización suave de voz (conserva naturalidad, sin Demucs)
-        _gentle = getattr(self, 'proc_gentle_master', None)
-        if _gentle and _gentle.get():
-            gentle_chain = (
-                'highpass=f=80,'
-                'lowpass=f=12000,'
-                'anlmdn=s=2:p=0.002:r=0.002,'
-                'acompressor=threshold=0.5:ratio=2:attack=15:release=120:makeup=1.05:knee=8,'
-                'alimiter=limit=0.97:attack=5:release=30,'
-            )
+        gentle_chain = ''
+        if 'PRO' in profile or 'Masterizada' in profile:
+            gentle_chain += 'aecho=0.8:0.88:40:0.3,'
+            gentle_chain += 'acompressor=threshold=0.1:ratio=4:attack=5:release=50:makeup=1.5:knee=2.5,'
         else:
-            gentle_chain = ''
+            _gentle = getattr(self, 'proc_gentle_master', None)
+            if _gentle and _gentle.get():
+                gentle_chain += 'highpass=f=80,lowpass=f=12000,anlmdn=s=2:p=0.002:r=0.002,acompressor=threshold=0.5:ratio=2:attack=15:release=120:makeup=1.05:knee=8,alimiter=limit=0.97:attack=5:release=30,'
 
         beat_filter = (
             beat_pre
             + f'volume={vol_beat:.3f},'
             + f'afade=t=in:st=0:d={fade_in},'
             + f'afade=t=out:st={fo_start:.3f}:d={fade_out},'
-            + f'atrim=end={beat_needed:.3f},asetpts=PTS-STARTPTS[beat];'
+            + f'atrim=end={beat_needed:.3f},asetpts=PTS-STARTPTS[beat_raw];'
         )
 
         voz_filter = (
             f'[1:a]{gentle_chain}volume={vol_voz:.3f},'
             f'afade=t=in:st=0:d={fade_in},'
-            f'afade=t=out:st={fo_start:.3f}:d={fade_out}[voz];'
+            f'afade=t=out:st={fo_start:.3f}:d={fade_out}'
         )
+        
+        if clone_voice and harmony_voice:
+            voz_filter += (
+                ',asplit=3[v1][v2][v3];'
+                f'[v2]aecho=0.8:0.88:80:0.5,aecho=0.8:0.88:120:0.4,volume={vol_clone:.3f}[v2_fx];'
+                f'[v3]adelay=1000|1000,rubberband=pitch=1.2599,volume={vol_clone:.3f}[v3_fx];'
+                '[v1][v2_fx][v3_fx]amix=inputs=3:duration=longest[voz];'
+            )
+        elif clone_voice:
+            # Duplicar voz: una se queda normal [v1], la otra recibe eco y baja volumen [v2]
+            voz_filter += (
+                ',asplit=2[v1][v2];'
+                f'[v2]aecho=0.8:0.88:80:0.5,aecho=0.8:0.88:120:0.4,volume={vol_clone:.3f}[v2_fx];'
+                '[v1][v2_fx]amix=inputs=2:duration=longest[voz];'
+            )
+        elif harmony_voice:
+            voz_filter += (
+                ',asplit=2[v1][v3];'
+                f'[v3]adelay=1000|1000,rubberband=pitch=1.2599,volume={vol_clone:.3f}[v3_fx];'
+                '[v1][v3_fx]amix=inputs=2:duration=longest[voz];'
+            )
+        else:
+            voz_filter += '[voz];'
 
-        master = (
-            '[beat][voz]amix=inputs=2:duration=longest[mix];'
-            '[mix]'
-            'highpass=f=40,'          # quita rumble sub-bajo
-            'lowpass=f=16000,'        # quita ultra-agudos
-            'acompressor=threshold=0.4:ratio=3:attack=8:release=80:makeup=1.2:knee=6,'
-            'equalizer=f=80:width_type=o:width=1:g=2,'     # realza graves
-            'equalizer=f=3000:width_type=o:width=2:g=1.5,' # presencia vocal
-            'equalizer=f=8000:width_type=o:width=2:g=1,'   # aire / brillo
-            'alimiter=limit=0.95:attack=3:release=20,'     # anti-clip
-            'loudnorm=I=-14:LRA=9:TP=-1'                   # -14 LUFS Spotify
-            '[out]'
-        )
+        if 'PRO' in profile or 'Masterizada' in profile:
+            master_routing = '[voz]asplit=2[voz_mix][voz_sc];[beat_raw][voz_sc]sidechaincompress=threshold=0.08:ratio=4:attack=5:release=60:makeup=1.2[beat];[beat][voz_mix]amix=inputs=2:duration=longest[mix];'
+        else:
+            master_routing = '[beat_raw][voz]amix=inputs=2:duration=longest[mix];'
 
-        # Corte exacto donde termina el fade (fo_start + fade_out = voz_dur en el caso normal).
-        # voz_dur + fade_out generaba 4s de silencio al final que Spotify rechaza.
+        if 'Masterizada' in profile:
+            master_fx = 'highpass=f=40,lowpass=f=16000,acompressor=threshold=0.15:ratio=4:attack=5:release=50:makeup=2.5:knee=2.5,equalizer=f=80:width_type=o:width=1.5:g=3,equalizer=f=4000:width_type=o:width=2:g=2.5,alimiter=limit=0.95:attack=2:release=15,loudnorm=I=-12:LRA=7:TP=-1'
+        else:
+            master_fx = 'highpass=f=40,lowpass=f=16000,acompressor=threshold=0.4:ratio=3:attack=8:release=80:makeup=1.2:knee=6,equalizer=f=80:width_type=o:width=1:g=2,equalizer=f=3000:width_type=o:width=2:g=1.5,equalizer=f=8000:width_type=o:width=2:g=1,alimiter=limit=0.95:attack=3:release=20,loudnorm=I=-14:LRA=9:TP=-1'
+
+        master = master_routing + '[mix]' + master_fx + '[out]'
+
         end_t = fo_start + fade_out
-        r = subprocess.run([
+        cmd = [
             FFMPEG,
             '-stream_loop', '-1', '-i', beat_file,
             '-i', vocals_file,
             '-filter_complex', beat_filter + voz_filter + master,
-            '-map', '[out]',
-            '-t', f'{end_t:.3f}',
-            '-ar', '44100', '-ac', '2', '-b:a', '320k',
-            output_mp3, '-y'
-        ], capture_output=True)
+            '-map', '[out]'
+        ]
+        
+        if start_t is not None and duration_t is not None:
+            cmd.extend(['-ss', f'{start_t:.3f}', '-t', f'{duration_t:.3f}'])
+        elif preview_only:
+            cmd.extend(['-t', '15.0'])
+        else:
+            cmd.extend(['-t', f'{end_t:.3f}'])
+            
+        cmd.extend(['-y', output_mp3])
+        
+        if not preview_only:
+            # Alta calidad
+            cmd = cmd[:-2] + ['-ar', '44100', '-ac', '2', '-b:a', '320k'] + cmd[-2:]
+            
+        r = subprocess.run(cmd, capture_output=True)
 
         if r.returncode != 0:
             err = r.stderr.decode('utf-8', errors='replace')[-500:]
@@ -2613,21 +2720,25 @@ Professional mix, radio ready, 320kbps quality."
         self._do_batch_mix(pairs_to_mix)
 
     def preview_batch_mix(self, mode):
-        """Muestra diálogo de confirmación con lista de pares antes de mezclar."""
+        """Muestra diálogo de confirmación con lista de pares antes de mezclar, o pre-escucha uno."""
         if self.match_running: return
         if not self.match_pairs:
             messagebox.showinfo("Sin análisis","Primero analizá la compatibilidad."); return
         threshold = self.match_threshold.get()
         above     = [p for p in self.match_pairs if p['score'] >= threshold]
 
-        if mode is None:
+        if mode is None or mode == 'listen':
             sel = self.match_tree.selection()
             if not sel:
-                messagebox.showinfo("Sin selección","Seleccioná pares en la tabla."); return
+                messagebox.showinfo("Sin selección","Seleccioná un par en la tabla."); return
             all_items    = self.match_tree.get_children()
             pairs_to_mix = [above[all_items.index(s)] for s in sel
                             if all_items.index(s) < len(above)]
             label = f"{len(pairs_to_mix)} seleccionado(s)"
+            
+            if mode == 'listen':
+                self._preview_single_mix(pairs_to_mix[0])
+                return
         elif mode == 'all':
             pairs_to_mix = above
             label = f"todos ({len(above)})"
@@ -2705,10 +2816,7 @@ Professional mix, radio ready, 320kbps quality."
                     f"  [{i}/{len(pairs)}] {vname[:22]} ←→ {bname[:22]} ({score}%)")
 
                 # ── Mezcla ────────────────────────────────────
-                vf_path = p['voz']['file']
-                bf_path = p['beat']['file']
-                self._mix_with_beat(vf_path, bf_path, out_f,
-                                    log_fn=self.matcher_log_write)
+                self._mix_with_beat(p, None, out_f, log_fn=self.matcher_log_write)
                 if not os.path.exists(out_f):
                     self.matcher_log_write(f"      ❌ Mezcla falló")
                     fail += 1
@@ -2788,6 +2896,646 @@ Professional mix, radio ready, 320kbps quality."
             self.root.after(0, lambda: self.match_mix_status.config(text=f"❌ {e}"))
         finally:
             self.match_running = False
+
+    def _preview_single_mix(self, pair):
+        """Abre el Estudio de Mezcla Visual Multicanal para el par seleccionado."""
+        win = tk.Toplevel(self.root)
+        vn = os.path.basename(pair['voz']['name'])[:20]
+        bn = os.path.basename(pair['beat']['name'])[:20]
+        win.title(f"🎛️ Mini-DAW Estudio de Mezcla: {vn} + {bn}")
+        win.geometry("1000x640")
+        win.configure(bg='#1a1a2e')
+        win.grab_set()
+
+        hdr = tk.Frame(win, bg='#0f3460', pady=5)
+        hdr.pack(fill='x')
+        tk.Label(hdr, text="🎛️ Estudio de Mezcla Visual Completo", fg='#e94560', bg='#0f3460', font=('Arial', 12, 'bold')).pack(side='left', padx=10)
+        
+        ctrl_f = tk.Frame(hdr, bg='#0f3460')
+        ctrl_f.pack(side='right', padx=10)
+        
+        tk.Label(ctrl_f, text="Perfil:", fg='white', bg='#0f3460').pack(side='left')
+        mix_profile_var = tk.StringVar(value=self.mix_profile.get() if hasattr(self, 'mix_profile') else 'Normal')
+        cb = ttk.Combobox(ctrl_f, textvariable=mix_profile_var, values=['Normal', 'PRO', 'Masterizada'], width=12, state='readonly')
+        cb.pack(side='left', padx=5)
+        
+        clone_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(ctrl_f, text="🎤 Clon Reverb", variable=clone_var, fg='#00ff88', bg='#0f3460', selectcolor='#1a1a2e', activebackground='#0f3460').pack(side='left', padx=5)
+
+        harmony_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(ctrl_f, text="🎶 Armonía (Coros)", variable=harmony_var, fg='#ff00ff', bg='#0f3460', selectcolor='#1a1a2e', activebackground='#0f3460').pack(side='left', padx=5)
+
+        # Volúmenes
+        vol_f = tk.Frame(win, bg='#1a1a2e')
+        vol_f.pack(pady=5, fill='x', padx=20)
+        
+        def _make_slider(parent, label, default, color):
+            f = tk.Frame(parent, bg='#1a1a2e')
+            f.pack(side='left', expand=True)
+            tk.Label(f, text=label, fg=color, bg='#1a1a2e', font=('Arial', 9, 'bold')).pack()
+            s = tk.Scale(f, from_=0.0, to=3.0, resolution=0.1, orient='horizontal', bg='#1a1a2e', fg='white', highlightthickness=0)
+            s.set(default)
+            s.pack()
+            return s
+            
+        vol_voz_scale = _make_slider(vol_f, "Voz Principal", 1.5, '#00ff88')
+        vol_clone_scale = _make_slider(vol_f, "Efectos (Clon/Armonía)", 0.3, '#ff00ff')
+        vol_beat_scale = _make_slider(vol_f, "Beat (Instrumental)", 0.8, '#4da6ff')
+
+        state = {
+            'y_voz': None, 'y_beat': None, 'sr': 8000, 'dur': 0, 
+            'start': 0, 'end': 0, 'drawing': False,
+            'drag_mode': 'new', 'drag_start_click_t': 0, 'drag_orig_start': 0, 'drag_orig_end': 0,
+            'zoom': 1.0, 'offset': 0.0,
+            'playing': False, 'play_proc': None, 'play_start_t': 0, 'play_start_sec': 0,
+            'paused': False, 'paused_sec': 0.0
+        }
+
+        # Canvas Doble en un solo widget
+        cv = tk.Canvas(win, width=960, height=200, bg='#0f3460', highlightthickness=0)
+        cv.pack(pady=10)
+        
+        status_lbl = tk.Label(win, text="⏳ Cargando audio...", fg='#a8a8b3', bg='#1a1a2e', font=('Arial',9))
+        status_lbl.pack()
+        
+        f2 = tk.Frame(win, bg='#1a1a2e'); f2.pack(pady=5)
+        tk.Label(f2, text="Inicio (s):", fg='white', bg='#1a1a2e').pack(side='left')
+        t_start = tk.Entry(f2, width=8); t_start.pack(side='left', padx=5)
+        t_start.insert(0, "0.0")
+        tk.Label(f2, text="Fin (s):", fg='white', bg='#1a1a2e').pack(side='left')
+        t_end = tk.Entry(f2, width=8); t_end.pack(side='left', padx=5)
+        t_end.insert(0, "0.0")
+        
+        def _time_to_x(t):
+            view_dur = state['dur'] / state['zoom']
+            if view_dur == 0: return 0
+            return ((t - state['offset']) / view_dur) * 960
+
+        def _x_to_time(x):
+            view_dur = state['dur'] / state['zoom']
+            return state['offset'] + (x / 960) * view_dur
+
+        def _draw_waveforms():
+            if state['y_voz'] is None: return
+            cv.delete("wave")
+            
+            view_dur = state['dur'] / state['zoom']
+            start_sample = int(state['offset'] * state['sr'])
+            end_sample = int((state['offset'] + view_dur) * state['sr'])
+            
+            import numpy as np
+            
+            # Dibujar Voz (Arriba)
+            y_v = state['y_voz'][start_sample:end_sample]
+            if len(y_v) > 0:
+                chunks = np.array_split(y_v, 960)
+                for i, chunk in enumerate(chunks):
+                    if len(chunk) == 0: continue
+                    m = np.max(np.abs(chunk))
+                    h = max(1, m * 90)
+                    cv.create_line(i, 50 - h/2, i, 50 + h/2, fill='#00ff88', tags="wave")
+                    
+            # Dibujar Beat (Abajo)
+            y_b = state['y_beat'][start_sample:end_sample]
+            if len(y_b) > 0:
+                chunks = np.array_split(y_b, 960)
+                for i, chunk in enumerate(chunks):
+                    if len(chunk) == 0: continue
+                    m = np.max(np.abs(chunk))
+                    h = max(1, m * 90)
+                    cv.create_line(i, 150 - h/2, i, 150 + h/2, fill='#4da6ff', tags="wave")
+                    
+            cv.tag_lower("wave")
+            # Separador central
+            cv.create_line(0, 100, 960, 100, fill='#1a1a2e', tags="wave")
+            
+            _update_selection_rect()
+
+        def _update_selection_rect():
+            cv.delete("sel")
+            x1 = _time_to_x(state['start'])
+            x2 = _time_to_x(state['end'])
+            if x1 < 0: x1 = 0
+            if x2 > 960: x2 = 960
+            if x2 > x1:
+                cv.create_rectangle(x1, 0, x2, 200, fill='#533483', stipple='gray25', tags="sel", outline='')
+                cv.create_line(x1, 0, x1, 200, fill='#00ff88', tags="sel")
+                cv.create_line(x2, 0, x2, 200, fill='#e94560', tags="sel")
+            cv.tag_lower("sel")
+            
+            t_start.delete(0, 'end'); t_start.insert(0, f"{state['start']:.2f}")
+            t_end.delete(0, 'end'); t_end.insert(0, f"{state['end']:.2f}")
+
+        def _on_zoom(event):
+            factor = 1.2 if event.delta > 0 else 0.8
+            t_mouse = _x_to_time(event.x)
+            new_zoom = max(1.0, min(100.0, state['zoom'] * factor))
+            new_view_dur = state['dur'] / new_zoom
+            
+            ratio = event.x / 960
+            new_offset = t_mouse - (ratio * new_view_dur)
+            new_offset = max(0.0, min(new_offset, state['dur'] - new_view_dur))
+            
+            state['zoom'] = new_zoom
+            state['offset'] = new_offset
+            _draw_waveforms()
+
+        def _on_click(event):
+            t = _x_to_time(event.x)
+            state['drag_start_click_t'] = t
+            state['drag_orig_start'] = state['start']
+            state['drag_orig_end'] = state['end']
+            
+            margin = (state['dur'] / state['zoom']) * 0.04 # 4% de la vista actual para agarrar los bordes más fácil
+            if abs(t - state['start']) < margin:
+                state['drag_mode'] = 'left'
+            elif abs(t - state['end']) < margin:
+                state['drag_mode'] = 'right'
+            elif state['start'] < t < state['end']:
+                state['drag_mode'] = 'center'
+            else:
+                state['drag_mode'] = 'new'
+                state['start'] = t
+                state['end'] = t
+            
+            state['drawing'] = True
+            _update_selection_rect()
+
+        def _on_drag(event):
+            if not state['drawing']: return
+            t = max(0, min(state['dur'], _x_to_time(event.x)))
+            
+            if state['drag_mode'] == 'new':
+                state['end'] = t
+            elif state['drag_mode'] == 'left':
+                state['start'] = min(t, state['end'] - 0.1)
+            elif state['drag_mode'] == 'right':
+                state['end'] = max(t, state['start'] + 0.1)
+            elif state['drag_mode'] == 'center':
+                delta = t - state['drag_start_click_t']
+                dur_sel = state['drag_orig_end'] - state['drag_orig_start']
+                new_s = max(0, state['drag_orig_start'] + delta)
+                new_e = new_s + dur_sel
+                if new_e > state['dur']:
+                    new_e = state['dur']
+                    new_s = new_e - dur_sel
+                state['start'] = new_s
+                state['end'] = new_e
+                
+            _update_selection_rect()
+
+        def _on_release(event):
+            state['drawing'] = False
+            if state['start'] > state['end']:
+                state['start'], state['end'] = state['end'], state['start']
+            if abs(state['start'] - state['end']) < 0.1:
+                state['start'] = 0
+                state['end'] = state['dur']
+            _update_selection_rect()
+
+        cv.bind("<Button-1>", _on_click)
+        cv.bind("<B1-Motion>", _on_drag)
+        cv.bind("<ButtonRelease-1>", _on_release)
+        cv.bind("<MouseWheel>", _on_zoom)
+
+        def _load_audio():
+            try:
+                import librosa
+                v_file = pair['voz']['file']
+                b_file = pair['beat']['file']
+                y_v, sr = librosa.load(v_file, sr=8000, mono=True)
+                y_b, _ = librosa.load(b_file, sr=8000, mono=True)
+                
+                dur_v = len(y_v) / sr
+                dur_b = len(y_b) / sr
+                dur = max(dur_v, dur_b)
+                
+                import numpy as np
+                if dur_v < dur: y_v = np.pad(y_v, (0, int((dur - dur_v) * sr)))
+                if dur_b < dur: 
+                    reps = int(np.ceil(dur / dur_b))
+                    y_b = np.tile(y_b, reps)[:int(dur * sr)]
+                
+                state['y_voz'] = y_v
+                state['y_beat'] = y_b
+                state['sr'] = sr
+                state['dur'] = dur
+                state['end'] = dur
+                
+                self.root.after(0, lambda: _draw_waveforms())
+                self.root.after(0, lambda: status_lbl.config(text="✅ Listo. Hacé zoom, seleccioná, ajustá y dale a Play."))
+            except Exception as e:
+                self.root.after(0, lambda: status_lbl.config(text=f"❌ Error visual: {e}"))
+
+        threading.Thread(target=_load_audio, daemon=True).start()
+        
+        def _playhead_loop():
+            if not state['playing']: return
+            import time
+            if state['paused']:
+                elapsed = state['paused_sec']
+            else:
+                elapsed = state['play_start_sec'] + (time.time() - state['play_start_t'])
+                
+            cv.delete("playhead")
+            sel_dur = state['end'] - state['start']
+            
+            if elapsed <= sel_dur:
+                x = _time_to_x(state['start'] + elapsed)
+                if 0 <= x <= 960:
+                    cv.create_line(x, 0, x, 200, fill='#ffff00', width=2, tags="playhead")
+                if not state['paused']:
+                    win.after(30, _playhead_loop)
+            else:
+                state['playing'] = False
+                cv.delete("playhead")
+
+        def _play(start_offset=0.0):
+            import subprocess, time
+            if state['play_proc']:
+                subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True)
+                
+            status_lbl.config(text="⏳ Mezclando... (puede tomar unos seg)")
+            
+            out_dir = os.path.join(os.path.expanduser("~"), ".cache", "tiktok_lives")
+            os.makedirs(out_dir, exist_ok=True)
+            tmp_out = os.path.join(out_dir, "preview_mix.wav")
+            if os.path.exists(tmp_out): os.remove(tmp_out)
+            
+            def _run():
+                prof = mix_profile_var.get()
+                clone = clone_var.get()
+                harm = harmony_var.get()
+                v_voz = vol_voz_scale.get()
+                v_beat = vol_beat_scale.get()
+                v_clo = vol_clone_scale.get()
+                
+                real_start = state['start'] + start_offset
+                real_dur = (state['end'] - state['start']) - start_offset
+                
+                # Pasamos start_t y duration_t a _mix_with_beat para procesar solo esa parte y rápido
+                self._mix_with_beat(
+                    pair, None, tmp_out, log_fn=lambda x: None, 
+                    preview_only=False, clone_voice=clone, override_profile=prof,
+                    harmony_voice=harm, vol_voz_override=v_voz, vol_beat_override=v_beat,
+                    vol_clone_override=v_clo, start_t=real_start, duration_t=real_dur
+                )
+                
+                if os.path.exists(tmp_out):
+                    self.root.after(0, lambda: status_lbl.config(text=f"▶️ Reproduciendo ({prof})..."))
+                    state['play_proc'] = subprocess.Popen(['ffplay', '-nodisp', '-autoexit', tmp_out])
+                    state['playing'] = True
+                    state['paused'] = False
+                    state['play_start_t'] = time.time()
+                    state['play_start_sec'] = start_offset
+                    self.root.after(0, _playhead_loop)
+                else:
+                    self.root.after(0, lambda: status_lbl.config(text="❌ Error al generar mezcla"))
+            
+            threading.Thread(target=_run, daemon=True).start()
+
+        def _pause():
+            if state['playing'] and not state['paused']:
+                import time, subprocess
+                state['paused_sec'] = state['play_start_sec'] + (time.time() - state['play_start_t'])
+                state['paused'] = True
+                if state['play_proc']:
+                    subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True)
+                status_lbl.config(text="⏸️ Pausado")
+            elif state['paused']:
+                _play(start_offset=state['paused_sec'])
+
+        def _stop():
+            state['playing'] = False
+            state['paused'] = False
+            cv.delete("playhead")
+            import subprocess
+            subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True)
+            status_lbl.config(text="⏹️ Detenido")
+
+        def _export():
+            _stop()
+            status_lbl.config(text="⏳ Exportando mezcla final en Alta Calidad...")
+            
+            out_dir = self.match_out_folder.get().strip() or \
+                      os.path.join(os.path.expanduser("~"), "TikTok_Lives", "Mezclas")
+            os.makedirs(out_dir, exist_ok=True)
+            
+            prof = mix_profile_var.get()
+            clone = clone_var.get()
+            harm = harmony_var.get()
+            v_voz = vol_voz_scale.get()
+            v_beat = vol_beat_scale.get()
+            v_clo = vol_clone_scale.get()
+            
+            vn = os.path.splitext(os.path.basename(pair['voz']['name']))[0][:15]
+            bn = os.path.splitext(os.path.basename(pair['beat']['name']))[0][:15]
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            final_out = os.path.join(out_dir, f"FINAL_{vn}_{bn}_{ts}.mp3")
+            
+            def _run_exp():
+                self._mix_with_beat(
+                    pair, None, final_out, log_fn=lambda x: None, 
+                    preview_only=False, clone_voice=clone, override_profile=prof,
+                    harmony_voice=harm, vol_voz_override=v_voz, vol_beat_override=v_beat,
+                    vol_clone_override=v_clo
+                )
+                if os.path.exists(final_out):
+                    self.root.after(0, lambda: messagebox.showinfo("Exportación Exitosa", f"Tu mezcla se ha guardado en:\n{final_out}"))
+                    self.root.after(0, lambda: status_lbl.config(text=f"✅ Guardado en: {final_out}"))
+                else:
+                    self.root.after(0, lambda: status_lbl.config(text="❌ Error al exportar"))
+                    
+            threading.Thread(target=_run_exp, daemon=True).start()
+
+        bf = tk.Frame(win, bg='#1a1a2e')
+        bf.pack(pady=10, fill='x')
+        
+        # Botones de reproducción a la izquierda
+        play_f = tk.Frame(bf, bg='#1a1a2e')
+        play_f.pack(side='left', padx=10)
+        self._btn(play_f, "▶️ Escuchar Selección", lambda: _play(0.0), '#1a6b3a', font=('Arial',10,'bold')).pack(side='left', padx=5)
+        self._btn(play_f, "⏯️ Pausa/Reanudar", _pause, '#f5a623', font=('Arial',10,'bold')).pack(side='left', padx=5)
+        self._btn(play_f, "⏹️ Detener", _stop, '#e94560', font=('Arial',10,'bold')).pack(side='left', padx=5)
+        
+        # Botones de acción a la derecha
+        act_f = tk.Frame(bf, bg='#1a1a2e')
+        act_f.pack(side='right', padx=10)
+        self._btn(act_f, "💾 Exportar Mix Final", _export, '#533483', font=('Arial',10,'bold')).pack(side='left', padx=5)
+        self._btn(act_f, "✕ Cerrar", lambda: [_stop(), win.destroy()], '#333', font=('Arial',10,'bold')).pack(side='left', padx=5)
+
+    def _open_audio_editor(self, listbox):
+        """Abre un mini-editor para el archivo seleccionado en la lista."""
+        sel = listbox.curselection()
+        if not sel: return
+        filename = listbox.get(sel[0])
+        # Find absolute path
+        filepath = None
+        for f in self.match_voz_files:
+            if os.path.basename(f) == filename: filepath = f; break
+        if not filepath: return
+
+        win = tk.Toplevel(self.root)
+        win.title(f"✂️ Editor Visual PRO: {filename[:30]}")
+        win.geometry("820x400")
+        win.configure(bg='#1a1a2e')
+        win.grab_set()
+
+        tk.Label(win, text="✂️ Recorte Visual (con Zoom y Playhead)", fg='#e94560', bg='#1a1a2e', font=('Arial', 12, 'bold')).pack(pady=5)
+        
+        state = {
+            'y': None, 'sr': 8000, 'dur': 0, 
+            'start': 0, 'end': 0, 'drawing': False,
+            'drag_mode': 'new', 'drag_start_click_t': 0, 'drag_orig_start': 0, 'drag_orig_end': 0,
+            'zoom': 1.0, 'offset': 0.0,
+            'playing': False, 'play_proc': None, 'play_start_t': 0, 'play_start_sec': 0,
+            'paused': False, 'paused_sec': 0.0
+        }
+
+        cv = tk.Canvas(win, width=760, height=120, bg='#0f3460', highlightthickness=0)
+        cv.pack(pady=5)
+        
+        status_lbl = tk.Label(win, text="⏳ Cargando forma de onda...", fg='#a8a8b3', bg='#1a1a2e', font=('Arial',9))
+        status_lbl.pack()
+
+        f2 = tk.Frame(win, bg='#1a1a2e'); f2.pack(pady=5)
+        tk.Label(f2, text="Inicio (s):", fg='white', bg='#1a1a2e').pack(side='left')
+        t_start = tk.Entry(f2, width=8); t_start.pack(side='left', padx=5)
+        t_start.insert(0, "0.0")
+        tk.Label(f2, text="Fin (s):", fg='white', bg='#1a1a2e').pack(side='left')
+        t_end = tk.Entry(f2, width=8); t_end.pack(side='left', padx=5)
+        t_end.insert(0, "0.0")
+        tk.Label(f2, text=" | ", fg='#a8a8b3', bg='#1a1a2e').pack(side='left')
+        dur_lbl = tk.Label(f2, text="Duración: 0.00s", fg='#00ff88', bg='#1a1a2e', font=('Arial', 9, 'bold'))
+        dur_lbl.pack(side='left', padx=5)
+
+        def _time_to_x(t):
+            view_dur = state['dur'] / state['zoom']
+            if view_dur == 0: return 0
+            return ((t - state['offset']) / view_dur) * 760
+
+        def _x_to_time(x):
+            view_dur = state['dur'] / state['zoom']
+            return state['offset'] + (x / 760) * view_dur
+
+        def _draw_waveform_canvas():
+            if state['y'] is None: return
+            cv.delete("wave")
+            
+            view_dur = state['dur'] / state['zoom']
+            start_sample = int(state['offset'] * state['sr'])
+            end_sample = int((state['offset'] + view_dur) * state['sr'])
+            
+            y_view = state['y'][start_sample:end_sample]
+            if len(y_view) == 0: return
+            
+            import numpy as np
+            chunks = np.array_split(y_view, 760)
+            
+            for i, chunk in enumerate(chunks):
+                if len(chunk) == 0: continue
+                m = np.max(np.abs(chunk))
+                h = max(1, m * 110)
+                cv.create_line(i, 60 - h/2, i, 60 + h/2, fill='#00ff88', tags="wave")
+            
+            cv.tag_lower("wave")
+            _update_selection_rect()
+
+        def _update_selection_rect():
+            cv.delete("sel")
+            if state['dur'] > 0:
+                x1 = _time_to_x(state['start'])
+                x2 = _time_to_x(state['end'])
+                cv.create_rectangle(x1, 0, x2, 120, fill='#533483', stipple='gray50', outline='#e94560', width=2, tags="sel")
+                dur_lbl.config(text=f"Duración: {abs(state['end'] - state['start']):.2f}s")
+                cv.tag_raise("playhead")
+
+        def _on_click(e):
+            if state['dur'] == 0: return
+            t = max(0, min(state['dur'], _x_to_time(e.x)))
+            
+            view_dur = state['dur'] / state['zoom']
+            tol = view_dur * 0.015
+            
+            if abs(t - state['start']) < tol:
+                state['drag_mode'] = 'start'
+            elif abs(t - state['end']) < tol:
+                state['drag_mode'] = 'end'
+            elif state['start'] < t < state['end']:
+                state['drag_mode'] = 'center'
+                state['drag_start_click_t'] = t
+                state['drag_orig_start'] = state['start']
+                state['drag_orig_end'] = state['end']
+            else:
+                state['drag_mode'] = 'new'
+                state['start'] = t; state['end'] = t
+                
+            state['drawing'] = True
+            _update_selection_rect()
+
+        def _on_drag(e):
+            if not state['drawing'] or state['dur'] == 0: return
+            t = max(0, min(state['dur'], _x_to_time(e.x)))
+            
+            if state['drag_mode'] == 'start':
+                state['start'] = min(t, state['end'])
+            elif state['drag_mode'] == 'end':
+                state['end'] = max(t, state['start'])
+            elif state['drag_mode'] == 'center':
+                delta = t - state['drag_start_click_t']
+                new_start = state['drag_orig_start'] + delta
+                new_end = state['drag_orig_end'] + delta
+                if new_start < 0:
+                    new_end -= new_start; new_start = 0
+                if new_end > state['dur']:
+                    new_start -= (new_end - state['dur']); new_end = state['dur']
+                state['start'] = new_start; state['end'] = new_end
+            else:
+                state['end'] = t
+                
+            _update_selection_rect()
+
+        def _on_release(e):
+            if not state['drawing']: return
+            state['drawing'] = False
+            if state['start'] > state['end']:
+                state['start'], state['end'] = state['end'], state['start']
+            t_start.delete(0, 'end'); t_start.insert(0, f"{state['start']:.2f}")
+            t_end.delete(0, 'end'); t_end.insert(0, f"{state['end']:.2f}")
+            _update_selection_rect()
+
+        def _on_mousewheel(e):
+            if state['dur'] == 0: return
+            t_mouse = _x_to_time(e.x)
+            
+            if e.delta > 0:
+                state['zoom'] = min(50.0, state['zoom'] * 1.5)
+            else:
+                state['zoom'] = max(1.0, state['zoom'] / 1.5)
+                
+            view_dur = state['dur'] / state['zoom']
+            new_offset = t_mouse - (e.x / 760) * view_dur
+            new_offset = max(0, min(state['dur'] - view_dur, new_offset))
+            state['offset'] = new_offset
+            
+            _draw_waveform_canvas()
+
+        cv.bind("<ButtonPress-1>", _on_click)
+        cv.bind("<B1-Motion>", _on_drag)
+        cv.bind("<ButtonRelease-1>", _on_release)
+        cv.bind("<MouseWheel>", _on_mousewheel)
+        
+        def _load_audio():
+            try:
+                import librosa, numpy as np
+                y, sr = librosa.load(filepath, sr=8000, mono=True)
+                dur = len(y) / sr
+                state['y'] = y; state['sr'] = sr; state['dur'] = dur; state['end'] = dur
+                
+                self.root.after(0, lambda: status_lbl.config(text="✅ Audio listo. Rueda de ratón (Scroll) para hacer Zoom."))
+                self.root.after(0, lambda: t_end.delete(0, 'end'))
+                self.root.after(0, lambda: t_end.insert(0, f"{dur:.2f}"))
+                self.root.after(0, _draw_waveform_canvas)
+            except Exception as e:
+                self.root.after(0, lambda: status_lbl.config(text=f"❌ Error: {e}"))
+
+        threading.Thread(target=_load_audio, daemon=True).start()
+        
+        def _playhead_loop():
+            if not state['playing']: return
+            import time
+            elapsed = time.time() - state['play_start_t']
+            current_sec = state['play_start_sec'] + elapsed
+            
+            e = float(t_end.get().strip() or state['dur'])
+            state['paused_sec'] = current_sec # save for pause
+            
+            cv.delete("playhead")
+            if current_sec <= e and state['play_proc'] and state['play_proc'].poll() is None:
+                x = _time_to_x(current_sec)
+                cv.create_line(x, 0, x, 120, fill='#ffff00', width=2, tags="playhead")
+                win.after(30, _playhead_loop)
+            else:
+                state['playing'] = False
+                state['paused'] = False
+                cv.delete("playhead")
+
+        def _play_selection():
+            if state['playing']: _stop_playback(clear_playhead=True)
+            
+            if state['paused'] and state['paused_sec'] > 0:
+                s = state['paused_sec']
+            else:
+                s = float(t_start.get().strip() or 0)
+                
+            e = float(t_end.get().strip() or state['dur'])
+            duracion = e - s
+            if duracion <= 0: return
+            
+            state['paused'] = False
+            import time
+            state['play_proc'] = subprocess.Popen(['ffplay', '-nodisp', '-autoexit', '-ss', str(s), '-t', str(duracion), filepath])
+            state['playing'] = True
+            state['play_start_t'] = time.time()
+            state['play_start_sec'] = s
+            _playhead_loop()
+            
+        def _pause_playback():
+            if not state['playing']: return
+            state['playing'] = False
+            state['paused'] = True
+            subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True)
+            
+        def _stop_playback(clear_playhead=True):
+            state['playing'] = False
+            state['paused'] = False
+            state['paused_sec'] = 0.0
+            if clear_playhead: cv.delete("playhead")
+            subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True)
+
+        f1 = tk.Frame(win, bg='#1a1a2e'); f1.pack(pady=5)
+        self._btn(f1, "▶️ Escuchar", _play_selection, '#1a6b3a', font=('Arial',10,'bold')).pack(side='left', padx=5)
+        self._btn(f1, "⏸️ Pausa", _pause_playback, '#e68a00', font=('Arial',10,'bold')).pack(side='left', padx=5)
+        self._btn(f1, "⏹️ Detener", _stop_playback, '#e94560', font=('Arial',10,'bold')).pack(side='left', padx=5)
+
+        def apply_trim():
+            _stop_playback(clear_playhead=True)
+            s, e = t_start.get().strip(), t_end.get().strip()
+            duracion = float(e) - float(s)
+            if duracion <= 0:
+                messagebox.showerror("Error", "La selección no es válida.")
+                return
+                
+            base_name = os.path.splitext(os.path.basename(filepath))[0]
+            custom_name = tk.simpledialog.askstring("Nombre", "Nombre para el archivo recortado:", initialvalue=f"{base_name}_recortado")
+            
+            if not custom_name: return # Canceló
+            
+            import re
+            custom_name = re.sub(r'[\\/*?:"<>|]', "", custom_name)
+            ext = os.path.splitext(filepath)[1]
+            out_f = os.path.join(os.path.dirname(filepath), custom_name + ext)
+            
+            win.destroy()
+            self.match_mix_status.config(text=f"⏳ Recortando audio ({duracion:.1f}s)...")
+            def _cut():
+                subprocess.run([FFMPEG, '-i', filepath, '-ss', s, '-t', str(duracion), '-c', 'copy', out_f, '-y'], capture_output=True)
+                if os.path.exists(out_f):
+                    self.root.after(0, lambda: self._match_add_specific_file(out_f, listbox))
+                    self.root.after(0, lambda: self.match_mix_status.config(text="✅ Audio recortado"))
+            threading.Thread(target=_cut, daemon=True).start()
+
+        self._btn(win, "✂️ Guardar Recorte", apply_trim, '#533483', font=('Arial',10,'bold')).pack(pady=5)
+
+    def _match_add_specific_file(self, filepath, listbox):
+        if listbox == self.match_voz_lb:
+            files = list(self.match_voz_files)
+            if filepath not in files: files.append(filepath)
+            self._match_set_voz(files)
+        else:
+            files = list(self.match_beat_files)
+            if filepath not in files: files.append(filepath)
+            self._match_set_beat(files)
 
     # ════════════════════════════════════════════════════════
     #  DRAG & DROP
@@ -2893,6 +3641,13 @@ Professional mix, radio ready, 320kbps quality."
                     data = json.load(f)
                 self.artists       = data.get('artists', [])
                 self.output_folder = data.get('output_folder', self.output_folder)
+                if 'match_voz_folder' in data: self.match_voz_folder.set(data['match_voz_folder'])
+                if 'match_beat_folder' in data: self.match_beat_folder.set(data['match_beat_folder'])
+                if 'match_out_folder' in data: self.match_out_folder.set(data['match_out_folder'])
+                
+                if not hasattr(self, 'auto_cut_mins'): self.auto_cut_mins = tk.IntVar(value=30)
+                if 'auto_cut_mins' in data: self.auto_cut_mins.set(data['auto_cut_mins'])
+                
                 for a in self.artists:
                     a['status'] = 'offline'; a['recording'] = False
                     a.setdefault('auto_record', True)
@@ -2907,6 +3662,10 @@ Professional mix, radio ready, 320kbps quality."
             json.dump({
                 'artists':       artists_to_save,
                 'output_folder': self.output_folder,
+                'match_voz_folder': self.match_voz_folder.get(),
+                'match_beat_folder': self.match_beat_folder.get(),
+                'match_out_folder': self.match_out_folder.get(),
+                'auto_cut_mins': self.auto_cut_mins.get() if hasattr(self, 'auto_cut_mins') else 30,
                 'artist_name':   self.artist_name.get(),
                 'artist_genre':  self.artist_genre.get(),
             }, f, indent=2, ensure_ascii=False)
