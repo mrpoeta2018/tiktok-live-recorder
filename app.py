@@ -129,9 +129,11 @@ class App:
         self.match_running      = False
         self.mix_balance        = tk.StringVar(value='balanced')
         self.proc_gentle_master = tk.BooleanVar(value=False)
+        self.has_seen_tutorial = False
 
         self.load_config()
         self.build_ui()
+        self.root.after(500, self.check_tutorial)
         
         # Pre-cargar listas de voces y beats si las carpetas existen
         if os.path.isdir(self.match_voz_folder.get()):
@@ -3631,6 +3633,54 @@ Professional mix, radio ready."
                                 f"Copiaste:\n@{username}\n\n¿Lo agrego al monitor?"):
             self.add_artist(username)
 
+    def check_tutorial(self):
+        if not getattr(self, 'has_seen_tutorial', False):
+            ans = messagebox.askyesno("Bienvenido a TikTok Live Recorder",
+                                      "¡Hola! Parece que es tu primera vez aquí.\n\n¿Sabes cómo usar este programa?")
+            if ans:
+                self.has_seen_tutorial = True
+                self.save_config()
+                self.show_tips()
+            else:
+                self.start_guided_tutorial()
+
+    def show_tips(self):
+        messagebox.showinfo("Tips Rápidos",
+                            "Perfecto. Solo 3 recordatorios rápidos:\n\n"
+                            "1. En el **Monitor**, los audios muy largos se cortarán automáticamente cada 30 min (puedes cambiarlo).\n"
+                            "2. En el **Procesador**, usa 'Extraer Voz' para quitar los silencios y limpiar el audio.\n"
+                            "3. En el **Emparejador Pro**, puedes hacer ZOOM arrastrando el mouse en las ondas para encajar la voz y el beat con precisión milimétrica.\n\n"
+                            "¡A darle play y crear buena música!")
+
+    def start_guided_tutorial(self):
+        messagebox.showinfo("Paso 1: El Monitor Lives (El Cazador)",
+                            "Este programa funciona como tu estudio de grabación y mezcla personal, dividido en 3 pestañas principales.\n\n"
+                            "Primero estamos en **Monitor Lives**.\n\n"
+                            "Aquí escribes el usuario de TikTok del artista que quieres grabar (o pegas su link) y le das a '+ Agregar'.\n\n"
+                            "El programa vigilará en silencio si está en directo. Cuando cante, dale al botón verde '⏺ Grabar' y luego '⏹ Cortar' cuando termine. ¡Te guardará el MP3 en tu carpeta sin que tengas que gastar todo tu internet!")
+                            
+        messagebox.showinfo("Paso 2: Procesar Audio (La Limpieza)",
+                            "Una vez tengas el audio guardado, vamos a la segunda pestaña: **Procesar Audio**.\n\n"
+                            "A veces los artistas hablan mucho y cantan poco.\n"
+                            "Aquí seleccionas el MP3 que grabaste, y el programa usará Inteligencia Artificial para:\n"
+                            "1. Borrar todos los espacios donde no hay nadie hablando/cantando.\n"
+                            "2. Extraer SOLAMENTE su voz, borrando ruidos y la música de fondo que tuviera el live.\n\n"
+                            "El resultado será una voz Acapella limpia y lista para usar.")
+                            
+        messagebox.showinfo("Paso 3: Emparejador Pro (El Estudio)",
+                            "Finalmente, la magia pura está en el **Emparejador Pro**.\n\n"
+                            "1. Arriba cargas la voz acapella limpia y un Beat (pista musical) que tengas.\n"
+                            "2. Puedes mover la voz hacia la izquierda o derecha para que encaje perfecto con el ritmo del beat (¡Arrastra el mouse en la gráfica para hacer Zoom!).\n"
+                            "3. Abajo verás opciones profesionales: Puedes cambiarle el volumen a cada pista o usar '🎙️ Efecto Clon (Coros)' para que la voz suene doble como en un estudio real.\n\n"
+                            "Cuando te guste cómo suena, dale a '💾 Exportar Mix Final'.")
+                            
+        messagebox.showinfo("¡Todo Listo!",
+                            "¡Eso es todo!\n\n"
+                            "Ya puedes cazar a tus artistas favoritos, limpiar sus voces y mezclarlas con los mejores beats.\n\n"
+                            "Si alguna vez olvidas algo, lee la pestaña de Monitor Lives. ¡Que disfrutes creando tu música!")
+        self.has_seen_tutorial = True
+        self.save_config()
+
     # ════════════════════════════════════════════════════════
     #  CONFIG
     # ════════════════════════════════════════════════════════
@@ -3647,6 +3697,7 @@ Professional mix, radio ready."
                 
                 if not hasattr(self, 'auto_cut_mins'): self.auto_cut_mins = tk.IntVar(value=30)
                 if 'auto_cut_mins' in data: self.auto_cut_mins.set(data['auto_cut_mins'])
+                self.has_seen_tutorial = data.get('has_seen_tutorial', False)
                 
                 for a in self.artists:
                     a['status'] = 'offline'; a['recording'] = False
@@ -3666,6 +3717,7 @@ Professional mix, radio ready."
                 'match_beat_folder': self.match_beat_folder.get(),
                 'match_out_folder': self.match_out_folder.get(),
                 'auto_cut_mins': self.auto_cut_mins.get() if hasattr(self, 'auto_cut_mins') else 30,
+                'has_seen_tutorial': self.has_seen_tutorial,
                 'artist_name':   self.artist_name.get(),
                 'artist_genre':  self.artist_genre.get(),
             }, f, indent=2, ensure_ascii=False)
