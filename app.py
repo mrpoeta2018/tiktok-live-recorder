@@ -1695,7 +1695,7 @@ Professional mix, radio ready."
             filters.append(f'atempo={r:.5f}')
         return ','.join(filters) if filters else ''
 
-    def _mix_with_beat(self, vocals, beat, output_mp3, log_fn=None, preview_only=False, clone_voice=False, override_profile=None, harmony_voice=False, vol_voz_override=None, vol_beat_override=None, vol_clone_override=None, start_t=None, duration_t=None):
+    def _mix_with_beat(self, vocals, beat, output_mp3, log_fn=None, preview_only=False, clone_voice=False, override_profile=None, harmony_voice=False, vol_voz_override=None, vol_beat_override=None, vol_clone_override=None, start_t=None, duration_t=None, pauta_file=None):
         """
         PROTOCOLO DE MEZCLA INTELIGENTE CON PERFILES (Normal, PRO, Masterizada).
         """
@@ -1842,10 +1842,18 @@ Professional mix, radio ready."
         else:
             voz_filter += '[voz];'
 
-        if 'PRO' in profile or 'Masterizada' in profile:
-            master_routing = '[voz]asplit=2[voz_mix][voz_sc];[beat_raw][voz_sc]sidechaincompress=threshold=0.08:ratio=4:attack=5:release=60:makeup=1.2[beat];[beat][voz_mix]amix=inputs=2:duration=longest[mix];'
+        pauta_filter = ''
+        if pauta_file and os.path.exists(pauta_file):
+            pauta_filter = f'[2:a]volume=0.8,aecho=0.8:0.88:40:0.3[pauta];'
+            if 'PRO' in profile or 'Masterizada' in profile:
+                master_routing = '[voz]asplit=2[voz_mix][voz_sc];[beat_raw][voz_sc]sidechaincompress=threshold=0.08:ratio=4:attack=5:release=60:makeup=1.2[beat];[beat][voz_mix][pauta]amix=inputs=3:duration=longest[mix];'
+            else:
+                master_routing = '[beat_raw][voz][pauta]amix=inputs=3:duration=longest[mix];'
         else:
-            master_routing = '[beat_raw][voz]amix=inputs=2:duration=longest[mix];'
+            if 'PRO' in profile or 'Masterizada' in profile:
+                master_routing = '[voz]asplit=2[voz_mix][voz_sc];[beat_raw][voz_sc]sidechaincompress=threshold=0.08:ratio=4:attack=5:release=60:makeup=1.2[beat];[beat][voz_mix]amix=inputs=2:duration=longest[mix];'
+            else:
+                master_routing = '[beat_raw][voz]amix=inputs=2:duration=longest[mix];'
 
         if 'Masterizada' in profile:
             master_fx = 'highpass=f=40,lowpass=f=16000,acompressor=threshold=0.15:ratio=4:attack=5:release=50:makeup=2.5:knee=2.5,equalizer=f=80:width_type=o:width=1.5:g=3,equalizer=f=4000:width_type=o:width=2:g=2.5,alimiter=limit=0.95:attack=2:release=15,loudnorm=I=-12:LRA=7:TP=-1'
@@ -1859,9 +1867,15 @@ Professional mix, radio ready."
             FFMPEG,
             '-stream_loop', '-1', '-i', beat_file,
             '-i', vocals_file,
-            '-filter_complex', beat_filter + voz_filter + master,
-            '-map', '[out]'
         ]
+        
+        if pauta_file and os.path.exists(pauta_file):
+            cmd.extend(['-i', pauta_file])
+            
+        cmd.extend([
+            '-filter_complex', beat_filter + voz_filter + pauta_filter + master,
+            '-map', '[out]'
+        ])
         
         if start_t is not None and duration_t is not None:
             cmd.extend(['-ss', f'{start_t:.3f}', '-t', f'{duration_t:.3f}'])
@@ -3166,6 +3180,9 @@ Professional mix, radio ready."
             
             def _run():
                 prof = mix_profile_var.get()
+                pauta_file = None
+                if hasattr(self, 'pauta_cb') and self.pauta_cb.get():
+                    pauta_file = os.path.join(os.path.expanduser("~"), "TikTok_Lives", "Pautas", self.pauta_cb.get())
                 clone = clone_var.get()
                 harm = harmony_var.get()
                 v_voz = vol_voz_scale.get()
@@ -3180,7 +3197,7 @@ Professional mix, radio ready."
                     pair, None, tmp_out, log_fn=lambda x: None, 
                     preview_only=False, clone_voice=clone, override_profile=prof,
                     harmony_voice=harm, vol_voz_override=v_voz, vol_beat_override=v_beat,
-                    vol_clone_override=v_clo, start_t=real_start, duration_t=real_dur
+                    vol_clone_override=v_clo, start_t=real_start, duration_t=state['dur'], pauta_file=pauta_file
                 )
                 
                 if os.path.exists(tmp_out):
@@ -3217,6 +3234,9 @@ Professional mix, radio ready."
 
         def _export():
             _stop()
+            pauta_file = None
+            if hasattr(self, 'pauta_cb') and self.pauta_cb.get():
+                pauta_file = os.path.join(os.path.expanduser("~"), "TikTok_Lives", "Pautas", self.pauta_cb.get())
             status_lbl.config(text="⏳ Exportando mezcla final en Alta Calidad...")
             
             out_dir = self.match_out_folder.get().strip() or \
@@ -3240,7 +3260,7 @@ Professional mix, radio ready."
                     pair, None, final_out, log_fn=lambda x: None, 
                     preview_only=False, clone_voice=clone, override_profile=prof,
                     harmony_voice=harm, vol_voz_override=v_voz, vol_beat_override=v_beat,
-                    vol_clone_override=v_clo
+                    vol_clone_override=v_clo, pauta_file=pauta_file
                 )
                 if os.path.exists(final_out):
                     self.root.after(0, lambda: messagebox.showinfo("Exportación Exitosa", f"Tu mezcla se ha guardado en:\n{final_out}"))
@@ -3263,8 +3283,70 @@ Professional mix, radio ready."
         # Botones de acción a la derecha
         act_f = tk.Frame(bf, bg='#1a1a2e')
         act_f.pack(side='right', padx=10)
+        
+        pauta_f = tk.Frame(act_f, bg='#1a1a2e')
+        pauta_f.pack(side='left', padx=(0, 20))
+        tk.Label(pauta_f, text="🎙️ Pauta:", fg='white', bg='#1a1a2e', font=('Arial',9)).pack(side='left', padx=2)
+        self.pauta_cb = ttk.Combobox(pauta_f, state='readonly', width=12, font=('Arial',8))
+        self.pauta_cb.pack(side='left', padx=2)
+        self.pauta_btn = self._btn(pauta_f, "🎤 Grabar Pauta", lambda: self.toggle_pauta_record(self.pauta_btn, self.pauta_cb), '#533483', font=('Arial',9,'bold'))
+        self.pauta_btn.pack(side='left', padx=5)
+        self.root.after(0, lambda: self._refresh_pautas_cb(self.pauta_cb))
+        
         self._btn(act_f, "💾 Exportar Mix Final", _export, '#533483', font=('Arial',10,'bold')).pack(side='left', padx=5)
         self._btn(act_f, "✕ Cerrar", lambda: [_stop(), win.destroy()], '#333', font=('Arial',10,'bold')).pack(side='left', padx=5)
+
+    def _refresh_pautas_cb(self, cb):
+        import os
+        pautas_dir = os.path.join(os.path.expanduser("~"), "TikTok_Lives", "Pautas")
+        if not os.path.exists(pautas_dir):
+            cb['values'] = []
+            return
+        files = [f for f in os.listdir(pautas_dir) if f.lower().endswith('.wav')]
+        cb['values'] = files
+        if files and not cb.get():
+            cb.current(0)
+
+    def toggle_pauta_record(self, btn, cb):
+        if not hasattr(self, 'pauta_recording'):
+            self.pauta_recording = False
+            import queue
+            self.pauta_q = queue.Queue()
+
+        if self.pauta_recording:
+            # stop
+            self.pauta_recording = False
+            btn.config(text="🎤 Grabar Pauta", bg='#533483')
+            return
+        
+        # start
+        self.pauta_recording = True
+        btn.config(text="⏹️ Detener Grabación", bg='#e94560')
+        
+        def _record():
+            try:
+                import sounddevice as sd, soundfile as sf, os
+                from datetime import datetime
+                fs = 44100
+                pautas_dir = os.path.join(os.path.expanduser("~"), "TikTok_Lives", "Pautas")
+                os.makedirs(pautas_dir, exist_ok=True)
+                filename = os.path.join(pautas_dir, f"Pauta_{datetime.now().strftime('%H%M%S')}.wav")
+                
+                with sf.SoundFile(filename, mode='x', samplerate=fs, channels=1) as file:
+                    with sd.InputStream(samplerate=fs, channels=1, callback=lambda indata, frames, time, status: self.pauta_q.put(indata.copy())):
+                        while self.pauta_recording:
+                            file.write(self.pauta_q.get())
+                
+                self.root.after(0, lambda: self._refresh_pautas_cb(cb))
+                self.root.after(0, lambda: messagebox.showinfo("Pauta Guardada", f"Pauta guardada en:\n{filename}"))
+                self.root.after(0, lambda: cb.set(os.path.basename(filename)))
+            except Exception as e:
+                self.pauta_recording = False
+                self.root.after(0, lambda: messagebox.showerror("Error", f"Error al grabar (revisa tu micrófono):\n{e}"))
+                self.root.after(0, lambda: btn.config(text="🎤 Grabar Pauta", bg='#533483'))
+                
+        import threading
+        threading.Thread(target=_record, daemon=True).start()
 
     def _open_audio_editor(self, listbox):
         """Abre un mini-editor para el archivo seleccionado en la lista."""

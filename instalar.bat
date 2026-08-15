@@ -66,7 +66,7 @@ echo  [4/6] Instalando soporte TikTok...
 
 echo  [5/6] Instalando Demucs + PyTorch (esto puede tardar varios minutos)...
 "%PYTHON%" -m pip install demucs torch==2.2.0 torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cpu >nul 2>&1
-"%PYTHON%" -m pip install "numpy<2" soundfile >nul 2>&1
+"%PYTHON%" -m pip install "numpy<2" soundfile sounddevice >nul 2>&1
 
 echo  [6/6] Instalando librosa...
 "%PYTHON%" -m pip install librosa >nul 2>&1
@@ -82,7 +82,7 @@ echo  [9/9] Instalando soporte de metadatos MP3...
 
 echo.
 echo  Verificando instalacion...
-"%PYTHON%" -c "import streamlink, demucs, librosa, soundfile; print('OK')" >nul 2>&1
+"%PYTHON%" -c "import streamlink, demucs, librosa, soundfile, sounddevice; print('OK')" >nul 2>&1
 if errorlevel 1 (
     echo.
     echo  ADVERTENCIA: Alguna dependencia no se instalo correctamente.
