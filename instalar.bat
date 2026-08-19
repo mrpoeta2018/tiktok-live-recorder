@@ -82,7 +82,7 @@ echo  [9/9] Instalando soporte de metadatos MP3...
 
 echo.
 echo  Verificando instalacion...
-"%PYTHON%" -c "import streamlink, demucs, librosa, soundfile, sounddevice; print('OK')" >nul 2>&1
+"%PYTHON%" -c "import streamlink, demucs, librosa, soundfile, sounddevice, tkinterdnd2; print('OK')"
 if errorlevel 1 (
     echo.
     echo  ADVERTENCIA: Alguna dependencia no se instalo correctamente.
