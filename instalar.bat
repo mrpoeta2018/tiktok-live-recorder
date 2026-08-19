@@ -50,6 +50,16 @@ if "%PYTHON%"=="" (
 )
 
 echo.
+echo  Verificando motor de audio FFmpeg...
+ffmpeg -version >nul 2>&1
+if errorlevel 1 (
+    echo  FFmpeg no encontrado. Instalando automaticamente...
+    winget install ffmpeg --accept-package-agreements --accept-source-agreements
+) else (
+    echo  FFmpeg detectado.
+)
+
+echo.
 echo  Python encontrado: %PYTHON%
 echo.
 echo  [1/6] Actualizando pip...
