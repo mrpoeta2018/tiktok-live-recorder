@@ -626,7 +626,8 @@ class App:
         inp_entry.pack(side='left', padx=(0,6))
         self._bind_drop(inp_entry, self.proc_input_file)
         self._btn(f1, "Buscar archivo", self._browse_input, '#0a3d62').pack(side='left')
-        self._btn(f1, "Mis lives grabados", self._pick_from_lives, '#533483').pack(side='left', padx=6)
+        self._btn(f1, "Buscar carpeta", self._browse_folder, '#1a6b3a').pack(side='left', padx=6)
+        self._btn(f1, "Mis lives", self._pick_from_lives, '#533483').pack(side='left')
 
         # Fila de recorte
         f1_trim = tk.Frame(parent, bg='#1a1a2e'); f1_trim.pack(fill='x', padx=14, pady=(0, 4))
@@ -977,6 +978,10 @@ class App:
             filetypes=[("Audio","*.mp3 *.wav *.wma *.m4a *.ogg *.ts"),("Todos","*.*")])
         if f: self.proc_input_file.set(f)
 
+    def _browse_folder(self):
+        d = filedialog.askdirectory(title="Selecciona la carpeta con audios a procesar en lote")
+        if d: self.proc_input_file.set(d)
+
     def _browse_beat(self):
         f = filedialog.askopenfilename(
             title="Selecciona tu beat/instrumental",
@@ -1096,7 +1101,35 @@ class App:
             daemon=True
         ).start()
 
+    def _batch_extract_thread(self, input_dir, out_dir):
+        try:
+            valid_exts = ('.mp3', '.wav', '.wma', '.m4a', '.ogg', '.ts', '.mp4')
+            files = [os.path.join(input_dir, f) for f in os.listdir(input_dir) if f.lower().endswith(valid_exts)]
+            self.proc_log_write(f"   Encontrados {len(files)} archivos válidos.")
+            for i, f in enumerate(files):
+                if not self.proc_running: break
+                self.proc_log_write("\n" + "─"*30)
+                self.proc_log_write(f"   [{i+1}/{len(files)}] Procesando: {os.path.basename(f)}")
+                self._voice_extract_core(f, out_dir)
+            self.proc_log_write("═" * 50)
+            self.proc_log_write("✅ BATCH COMPLETADO.")
+            self.root.after(0, lambda: self.proc_status_lbl.config(text="✅ Carpeta Completada"))
+        except Exception as e:
+            self.proc_log_write(f"❌ Error Batch: {e}")
+        finally:
+            self.proc_running = False
+            self.root.after(0, self.proc_bar.stop)
+            self.root.after(0, lambda: self.proc_btn.config(state='normal', bg='#e94560'))
+
     def _voice_extract_thread(self, input_file, out_dir):
+        try:
+            self._voice_extract_core(input_file, out_dir)
+        finally:
+            self.proc_running = False
+            self.root.after(0, self.proc_bar.stop)
+            self.root.after(0, lambda: self.proc_btn.config(state='normal', bg='#e94560'))
+
+    def _voice_extract_core(self, input_file, out_dir):
         """Pipeline Tab 2: solo extracción/limpieza de voz, sin mezcla."""
         try:
             base = os.path.splitext(os.path.basename(input_file))[0]
@@ -1181,10 +1214,6 @@ class App:
         except Exception as e:
             self.proc_log_write(f"❌ Error: {e}")
             self.root.after(0, lambda: self.proc_status_lbl.config(text="❌ Error"))
-        finally:
-            self.proc_running = False
-            self.root.after(0, self.proc_bar.stop)
-            self.root.after(0, lambda: self.proc_btn.config(state='normal', bg='#e94560'))
 
     def start_quick_mix(self):
         """Mezcla directa: toma el audio tal cual, sin ningún procesamiento previo."""
@@ -1248,10 +1277,6 @@ class App:
         except Exception as e:
             self.proc_log_write(f"❌ Error: {e}")
             self.root.after(0, lambda: self.proc_status_lbl.config(text="❌ Error"))
-        finally:
-            self.proc_running = False
-            self.root.after(0, self.proc_bar.stop)
-            self.root.after(0, lambda: self.proc_btn.config(state='normal', bg='#e94560'))
             self.root.after(0, lambda: self.mix_btn.config(state='normal', bg='#1a6b3a'))
 
     
@@ -1688,10 +1713,6 @@ class App:
         except Exception as e:
             self.proc_log_write(f"❌ Error: {e}")
             self.root.after(0, lambda: self.proc_status_lbl.config(text="❌ Error"))
-        finally:
-            self.proc_running = False
-            self.root.after(0, self.proc_bar.stop)
-            self.root.after(0, lambda: self.proc_btn.config(state='normal', bg='#e94560'))
 
     def _detect_segments(self, input_file, out_dir, base):
         """Detecta y corta segmentos activos (donde hay rap/canto) usando ffmpeg silencedetect"""
