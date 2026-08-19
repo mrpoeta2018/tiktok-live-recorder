@@ -94,6 +94,8 @@ class App:
         self.last_clipboard = ""
 
         # Estado Procesador
+        self.proc_trim_start = 0.0
+        self.proc_trim_end = 0.0
         self.proc_input_file      = tk.StringVar()
         self.proc_beat_file       = tk.StringVar()
         self.proc_output_dir      = tk.StringVar(value=os.path.join(os.path.expanduser("~"), "TikTok_Lives"))
@@ -626,6 +628,12 @@ class App:
         self._btn(f1, "Buscar archivo", self._browse_input, '#0a3d62').pack(side='left')
         self._btn(f1, "Mis lives grabados", self._pick_from_lives, '#533483').pack(side='left', padx=6)
 
+        # Fila de recorte
+        f1_trim = tk.Frame(parent, bg='#1a1a2e'); f1_trim.pack(fill='x', padx=14, pady=(0, 4))
+        self._btn(f1_trim, "✂️ Escuchar y Recortar", self._open_trimmer_tab2, '#e94560').pack(side='left')
+        self.proc_trim_lbl = tk.Label(f1_trim, text=" Recorte: Archivo completo", fg='#a8a8b3', bg='#1a1a2e', font=('Arial',9))
+        self.proc_trim_lbl.pack(side='left', padx=10)
+
         # ── ② Opciones de procesamiento ──────────────────────
         self._section(parent, "② Opciones de extracción de voz")
         f2 = tk.Frame(parent, bg='#1a1a2e'); f2.pack(fill='x', padx=14, pady=6)
@@ -1092,10 +1100,11 @@ class App:
             # Paso 1: Convertir a WAV
             self.proc_log_write("🔄 Paso 1/3: Preparando audio...")
             wav_raw = os.path.join(out_dir, f"{base}_raw.wav")
-            r = subprocess.run([
-                FFMPEG, '-i', input_file,
-                '-ar', '44100', '-ac', '2', wav_raw, '-y'
-            ], capture_output=True)
+            cmd = [FFMPEG]
+            if getattr(self, 'proc_trim_end', 0) > getattr(self, 'proc_trim_start', 0):
+                cmd.extend(['-ss', str(self.proc_trim_start), '-to', str(self.proc_trim_end)])
+            cmd.extend(['-i', input_file, '-ar', '44100', '-ac', '2', wav_raw, '-y'])
+            r = subprocess.run(cmd, capture_output=True)
             if r.returncode != 0:
                 self.proc_log_write("❌ Error en conversión de audio"); return
 
@@ -1240,6 +1249,256 @@ class App:
             self.root.after(0, lambda: self.proc_btn.config(state='normal', bg='#e94560'))
             self.root.after(0, lambda: self.mix_btn.config(state='normal', bg='#1a6b3a'))
 
+    
+    def _open_trimmer_tab2(self):
+        filepath = self.proc_input_file.get().strip()
+        if not filepath or not os.path.exists(filepath):
+            messagebox.showerror("Error", "Selecciona un archivo válido primero.")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title(f"✂️ Escuchar y Recortar: {os.path.basename(filepath)[:30]}")
+        win.geometry("820x450")
+        win.configure(bg='#1a1a2e')
+        win.grab_set()
+
+        tk.Label(win, text="✂️ Escucha el archivo y selecciona qué parte extraer", fg='#e94560', bg='#1a1a2e', font=('Arial', 12, 'bold')).pack(pady=5)
+        
+        state = {
+            'y': None, 'sr': 4000, 'dur': 0, 
+            'start': getattr(self, 'proc_trim_start', 0), 'end': getattr(self, 'proc_trim_end', 0), 'drawing': False,
+            'drag_mode': 'new', 'drag_start_click_t': 0, 'drag_orig_start': 0, 'drag_orig_end': 0,
+            'zoom': 1.0, 'offset': 0.0,
+            'playing': False, 'play_proc': None, 'play_start_t': 0, 'play_start_sec': 0,
+            'paused': False, 'paused_sec': 0.0
+        }
+
+        cv = tk.Canvas(win, width=760, height=120, bg='#0f3460', highlightthickness=0)
+        cv.pack(pady=5)
+        
+        status_lbl = tk.Label(win, text="⏳ Cargando audio (puede tardar unos segundos)...", fg='#a8a8b3', bg='#1a1a2e', font=('Arial',9))
+        status_lbl.pack()
+
+        f2 = tk.Frame(win, bg='#1a1a2e'); f2.pack(pady=5)
+        tk.Label(f2, text="Inicio (s):", fg='white', bg='#1a1a2e').pack(side='left')
+        t_start = tk.Entry(f2, width=8); t_start.pack(side='left', padx=5)
+        t_start.insert(0, str(state['start']))
+        tk.Label(f2, text="Fin (s):", fg='white', bg='#1a1a2e').pack(side='left')
+        t_end = tk.Entry(f2, width=8); t_end.pack(side='left', padx=5)
+        t_end.insert(0, str(state['end']))
+        tk.Label(f2, text=" | ", fg='#a8a8b3', bg='#1a1a2e').pack(side='left')
+        dur_lbl = tk.Label(f2, text="Duración Seleccionada: 0.00s", fg='#00ff88', bg='#1a1a2e', font=('Arial', 9, 'bold'))
+        dur_lbl.pack(side='left', padx=5)
+
+        def _time_to_x(t):
+            view_dur = state['dur'] / state['zoom']
+            if view_dur == 0: return 0
+            return ((t - state['offset']) / view_dur) * 760
+
+        def _x_to_time(x):
+            view_dur = state['dur'] / state['zoom']
+            return state['offset'] + (x / 760) * view_dur
+
+        def _draw_waveform_canvas():
+            if state['y'] is None: return
+            cv.delete("wave")
+            
+            view_dur = state['dur'] / state['zoom']
+            start_sample = int(state['offset'] * state['sr'])
+            end_sample = int((state['offset'] + view_dur) * state['sr'])
+            
+            y_view = state['y'][start_sample:end_sample]
+            if len(y_view) == 0: return
+            
+            import numpy as np
+            chunks = np.array_split(y_view, 760)
+            
+            for i, chunk in enumerate(chunks):
+                if len(chunk) == 0: continue
+                m = np.max(np.abs(chunk))
+                h = max(1, m * 110)
+                cv.create_line(i, 60 - h/2, i, 60 + h/2, fill='#00ff88', tags="wave")
+            
+            cv.tag_lower("wave")
+            _update_selection_rect()
+
+        def _update_selection_rect():
+            cv.delete("sel")
+            if state['dur'] > 0:
+                x1 = _time_to_x(state['start'])
+                x2 = _time_to_x(state['end'])
+                cv.create_rectangle(x1, 0, x2, 120, fill='#533483', stipple='gray50', outline='#e94560', width=2, tags="sel")
+                dur_lbl.config(text=f"Duración: {abs(state['end'] - state['start']):.2f}s")
+                cv.tag_raise("playhead")
+
+        def _on_click(e):
+            if state['dur'] == 0: return
+            t = max(0, min(state['dur'], _x_to_time(e.x)))
+            view_dur = state['dur'] / state['zoom']
+            tol = view_dur * 0.015
+            if abs(t - state['start']) < tol: state['drag_mode'] = 'start'
+            elif abs(t - state['end']) < tol: state['drag_mode'] = 'end'
+            elif state['start'] < t < state['end']:
+                state['drag_mode'] = 'center'
+                state['drag_start_click_t'] = t
+                state['drag_orig_start'] = state['start']
+                state['drag_orig_end'] = state['end']
+            else:
+                state['drag_mode'] = 'new'
+                state['start'] = t; state['end'] = t
+            _update_selection_rect()
+
+        def _on_drag(e):
+            if state['dur'] == 0: return
+            t = max(0, min(state['dur'], _x_to_time(e.x)))
+            if state['drag_mode'] == 'new': state['end'] = t
+            elif state['drag_mode'] == 'start': state['start'] = min(t, state['end'])
+            elif state['drag_mode'] == 'end': state['end'] = max(t, state['start'])
+            elif state['drag_mode'] == 'center':
+                dt = t - state['drag_start_click_t']
+                ns = state['drag_orig_start'] + dt
+                ne = state['drag_orig_end'] + dt
+                if ns < 0: ns = 0; ne = ns + (state['drag_orig_end'] - state['drag_orig_start'])
+                if ne > state['dur']: ne = state['dur']; ns = ne - (state['drag_orig_end'] - state['drag_orig_start'])
+                state['start'] = ns; state['end'] = ne
+            _update_selection_rect()
+
+        def _on_release(e):
+            if state['start'] > state['end']: state['start'], state['end'] = state['end'], state['start']
+            t_start.delete(0, 'end'); t_start.insert(0, f"{state['start']:.2f}")
+            t_end.delete(0, 'end'); t_end.insert(0, f"{state['end']:.2f}")
+            _update_selection_rect()
+
+        def _on_scroll(e):
+            if state['dur'] == 0: return
+            t_center = _x_to_time(e.x)
+            factor = 1.2 if e.delta > 0 else 1/1.2
+            state['zoom'] = max(1.0, state['zoom'] * factor)
+            view_dur = state['dur'] / state['zoom']
+            state['offset'] = max(0.0, min(t_center - view_dur/2, state['dur'] - view_dur))
+            _draw_waveform_canvas()
+
+        cv.bind("<Button-1>", _on_click)
+        cv.bind("<B1-Motion>", _on_drag)
+        cv.bind("<ButtonRelease-1>", _on_release)
+        cv.bind("<MouseWheel>", _on_scroll)
+
+        def _update_playhead():
+            cv.delete("playhead")
+            if state['playing']:
+                if state['paused']:
+                    t = state['paused_sec']
+                else:
+                    t = state['play_start_sec'] + (time.time() - state['play_start_t'])
+                
+                if t >= state['end']:
+                    _stop()
+                    t = state['start']
+                
+                x = _time_to_x(t)
+                cv.create_line(x, 0, x, 120, fill='white', width=2, tags="playhead")
+                win.after(50, _update_playhead)
+
+        def _play():
+            _stop()
+            try:
+                state['start'] = float(t_start.get())
+                state['end'] = float(t_end.get())
+            except: pass
+
+            if state['start'] >= state['end'] or state['end'] == 0: return
+
+            state['playing'] = True
+            state['paused'] = False
+            state['play_start_sec'] = state['start']
+            state['play_start_t'] = time.time()
+            
+            cmd = [FFMPEG.replace('ffmpeg','ffplay'), '-nodisp', '-autoexit', '-ss', str(state['start']), '-t', str(state['end'] - state['start']), filepath]
+            state['play_proc'] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            _update_playhead()
+            play_btn.config(text="⏸ Pausar")
+
+        def _pause():
+            if state['playing'] and not state['paused']:
+                state['paused'] = True
+                state['paused_sec'] = state['play_start_sec'] + (time.time() - state['play_start_t'])
+                if state['play_proc']:
+                    state['play_proc'].terminate()
+                    state['play_proc'] = None
+                play_btn.config(text="▶️ Continuar")
+            elif state['playing'] and state['paused']:
+                state['paused'] = False
+                state['play_start_sec'] = state['paused_sec']
+                state['play_start_t'] = time.time()
+                cmd = [FFMPEG.replace('ffmpeg','ffplay'), '-nodisp', '-autoexit', '-ss', str(state['play_start_sec']), '-t', str(state['end'] - state['play_start_sec']), filepath]
+                state['play_proc'] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                _update_playhead()
+                play_btn.config(text="⏸ Pausar")
+            else:
+                _play()
+
+        def _stop():
+            if state['play_proc']:
+                state['play_proc'].terminate()
+                state['play_proc'] = None
+            state['playing'] = False
+            state['paused'] = False
+            cv.delete("playhead")
+            play_btn.config(text="▶️ Reproducir")
+
+        ctrl_f = tk.Frame(win, bg='#1a1a2e'); ctrl_f.pack(pady=5)
+        play_btn = self._btn(ctrl_f, "▶️ Reproducir", _pause, '#0a3d62', font=('Arial',10,'bold'))
+        play_btn.pack(side='left', padx=5)
+        self._btn(ctrl_f, "⏹ Detener", _stop, '#e94560', font=('Arial',10,'bold')).pack(side='left', padx=5)
+
+        def _save_and_close():
+            _stop()
+            try:
+                self.proc_trim_start = float(t_start.get())
+                self.proc_trim_end = float(t_end.get())
+            except: pass
+            
+            if self.proc_trim_end > self.proc_trim_start:
+                try:
+                    self.proc_trim_lbl.config(text=f" Recorte: {self.proc_trim_start:.1f}s a {self.proc_trim_end:.1f}s", fg='#00ff88')
+                except: pass
+            else:
+                self.proc_trim_start = 0; self.proc_trim_end = 0
+                try:
+                    self.proc_trim_lbl.config(text=" Recorte: Archivo completo", fg='#a8a8b3')
+                except: pass
+                
+            win.destroy()
+
+        def _load_audio_thread():
+            try:
+                import librosa
+                import soundfile as sf
+                # Extraer un wav en baja calidad super rápido
+                temp_wav = os.path.join(os.environ.get('TEMP'), 'tiktok_preview.wav')
+                import subprocess
+                subprocess.run([FFMPEG, '-i', filepath, '-vn', '-ac', '1', '-ar', '4000', '-y', temp_wav], capture_output=True)
+                
+                y, sr = librosa.load(temp_wav, sr=4000, mono=True)
+                dur = len(y) / sr
+                state['y'] = y; state['sr'] = sr; state['dur'] = dur
+                if state['end'] == 0: state['end'] = dur
+                
+                self.root.after(0, lambda: status_lbl.config(text="✅ Audio listo. Rueda de ratón (Scroll) para hacer Zoom."))
+                self.root.after(0, lambda: t_end.delete(0, 'end'))
+                self.root.after(0, lambda: t_end.insert(0, f"{state['end']:.2f}"))
+                self.root.after(0, _draw_waveform_canvas)
+            except Exception as e:
+                self.root.after(0, lambda: status_lbl.config(text=f"❌ Error al cargar onda: {e}"))
+
+        import threading
+        threading.Thread(target=_load_audio_thread, daemon=True).start()
+
+        act_f = tk.Frame(win, bg='#1a1a2e'); act_f.pack(pady=10)
+        self._btn(act_f, "✅ Confirmar Recorte", _save_and_close, '#533483', font=('Arial',11,'bold')).pack(side='left', padx=5)
+        self._btn(act_f, "❌ Cancelar", lambda: [_stop(), win.destroy()], '#333', font=('Arial',10,'bold')).pack(side='left', padx=5)
+
+
     def _process_pipeline(self, input_file, beat_file, out_dir):
         try:
             base = os.path.splitext(os.path.basename(input_file))[0]
@@ -1248,10 +1507,11 @@ class App:
             # ── PASO 1: Convertir a WAV sin filtros (Demucs necesita audio natural) ──
             self.proc_log_write("🔄 Paso 1/4: Preparando audio...")
             wav_raw = os.path.join(out_dir, f"{base}_raw.wav")
-            r = subprocess.run([
-                FFMPEG, '-i', input_file,
-                '-ar', '44100', '-ac', '2', wav_raw, '-y'
-            ], capture_output=True)
+            cmd = [FFMPEG]
+            if getattr(self, 'proc_trim_end', 0) > getattr(self, 'proc_trim_start', 0):
+                cmd.extend(['-ss', str(self.proc_trim_start), '-to', str(self.proc_trim_end)])
+            cmd.extend(['-i', input_file, '-ar', '44100', '-ac', '2', wav_raw, '-y'])
+            r = subprocess.run(cmd, capture_output=True)
             if r.returncode != 0:
                 self.proc_log_write("❌ Error en conversión de audio"); return
 
