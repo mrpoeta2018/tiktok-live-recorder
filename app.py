@@ -637,6 +637,11 @@ class App:
         # ── ② Opciones de procesamiento ──────────────────────
         self._section(parent, "② Opciones de extracción de voz")
         f2 = tk.Frame(parent, bg='#1a1a2e'); f2.pack(fill='x', padx=14, pady=6)
+        
+        self.proc_engine = tk.StringVar(value="Clásico (Demucs Rápido)")
+        tk.Label(f2, text="Motor de IA:", fg='white', bg='#1a1a2e', font=('Arial',9,'bold')).pack(anchor='w', pady=(0,2))
+        cb = ttk.Combobox(f2, textvariable=self.proc_engine, values=["Clásico (Demucs Rápido)", "PRO (Calidad Extrema MDX-Net)"], state='readonly', width=40)
+        cb.pack(anchor='w', pady=(0,8))
         tk.Checkbutton(f2,
                        text="✂️   Detectar y cortar solo los segmentos donde rapeas / cantas",
                        variable=self.proc_detect_segments,

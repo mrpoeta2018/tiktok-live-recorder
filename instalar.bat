@@ -79,6 +79,9 @@ echo  [5/6] Instalando Demucs + PyTorch (esto puede tardar varios minutos)...
 "%PYTHON%" -m pip install demucs
 "%PYTHON%" -m pip install "numpy<2" soundfile sounddevice
 
+echo  [6/6] Instalando Modo PRO (UVR5)...
+"%PYTHON%" -m pip install "audio-separator[cpu]" >nul 2>&1
+
 echo  [6/6] Instalando librosa...
 "%PYTHON%" -m pip install librosa >nul 2>&1
 
