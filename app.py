@@ -82,7 +82,11 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("🎵 TikTok Live Recorder + Procesador")
-        self.root.geometry("1010x760")
+        self.root.geometry("1000x650")
+        try:
+            self.root.state('zoomed')
+        except:
+            pass
         self.root.configure(bg='#1a1a2e')
         self.root.resizable(True, True)
 
@@ -817,7 +821,7 @@ class App:
                   font=('Arial',8,'bold'), padx=6, pady=2).pack(side='left', padx=2)
         self._btn(fvb, "✕ Limpiar", lambda: self._match_clear('voz'), '#555',
                   font=('Arial',8,'bold'), padx=6, pady=2).pack(side='left', padx=2)
-        self.match_voz_lb = tk.Listbox(pv, bg='#16213e', fg='#a8a8b3',
+        self.match_voz_lb = tk.Listbox(pv, bg='#16213e', fg='#a8a8b3', height=5,
                                         font=('Courier',8), height=7,
                                         selectbackground='#e94560', selectmode='extended')
         self.match_voz_lb.pack(fill='both', expand=True, padx=6, pady=(0,2))
@@ -841,7 +845,7 @@ class App:
                   font=('Arial',8,'bold'), padx=6, pady=2).pack(side='left', padx=2)
         self._btn(fbb, "✕ Limpiar", lambda: self._match_clear('beat'), '#555',
                   font=('Arial',8,'bold'), padx=6, pady=2).pack(side='left', padx=2)
-        self.match_beat_lb = tk.Listbox(pb, bg='#16213e', fg='#a8a8b3',
+        self.match_beat_lb = tk.Listbox(pb, bg='#16213e', fg='#a8a8b3', height=5,
                                          font=('Courier',8), height=7,
                                          selectbackground='#e94560', selectmode='extended')
         self.match_beat_lb.pack(fill='both', expand=True, padx=6, pady=(0,2))
@@ -2933,7 +2937,7 @@ Professional mix, radio ready."
                  fg='#e94560', bg='#1a1a2e', font=('Arial',9,'bold')).pack(anchor='w', padx=10, pady=(8,2))
 
         lf = tk.Frame(win, bg='#1a1a2e'); lf.pack(fill='both', expand=True, padx=10)
-        lb = tk.Listbox(lf, bg='#16213e', fg='white', font=('Courier',9),
+        lb = tk.Listbox(lf, bg='#16213e', fg='white', font=('Courier',9), height=5,
                         selectbackground='#533483', activestyle='none')
         sb = ttk.Scrollbar(lf, orient='vertical', command=lb.yview)
         lb.configure(yscrollcommand=sb.set)
@@ -3065,7 +3069,7 @@ Professional mix, radio ready."
                  fg='#a8a8b3', bg='#0f3460', font=('Arial',9)).pack(anchor='w', padx=14)
 
         lf = tk.Frame(win, bg='#1a1a2e'); lf.pack(fill='both', expand=True, padx=14, pady=10)
-        lb = tk.Listbox(lf, bg='#16213e', fg='white', font=('Courier',8),
+        lb = tk.Listbox(lf, bg='#16213e', fg='white', font=('Courier',8), height=5,
                         activestyle='none', selectmode='browse')
         sb = ttk.Scrollbar(lf, orient='vertical', command=lb.yview)
         lb.configure(yscrollcommand=sb.set)
