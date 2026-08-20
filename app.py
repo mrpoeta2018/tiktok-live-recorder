@@ -3553,7 +3553,13 @@ Professional mix, radio ready."
                     vol_clone_override=v_clo, pauta_file=pauta_file
                 )
                 if os.path.exists(final_out):
-                    self.root.after(0, lambda: messagebox.showinfo("Exportación Exitosa", f"Tu mezcla se ha guardado en:\n{final_out}"))
+                    if getattr(self, 'proc_transcribe', None) and self.proc_transcribe.get():
+                        self.root.after(0, lambda: status_lbl.config(text="⏳ Transcribiendo voz y generando IA (puede tardar)..."))
+                        res = self._transcribe_audio(final_out, out_dir, vn, ts, log_fn=lambda x: None)
+                        if res and getattr(self, 'proc_img_prompt', None) and self.proc_img_prompt.get():
+                            self._generate_image_prompt(res[0], res[1], res[2], out_dir, vn, ts, log_fn=lambda x: None)
+                    
+                    self.root.after(0, lambda: messagebox.showinfo("Exportación Exitosa", f"Tu mezcla y documentos se han guardado en:\n{out_dir}"))
                     self.root.after(0, lambda: status_lbl.config(text=f"✅ Guardado en: {final_out}"))
                 else:
                     self.root.after(0, lambda: status_lbl.config(text="❌ Error al exportar"))
