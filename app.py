@@ -700,6 +700,32 @@ class App:
     # ════════════════════════════════════════════════════════
     #  TAB 3 — MIX STUDIO & EMPAREJADOR PRO
     # ════════════════════════════════════════════════════════
+
+    def _open_profile_selector(self):
+        win2 = tk.Toplevel(self.root)
+        win2.title("Modos de Exportación")
+        win2.geometry("300x320")
+        win2.configure(bg='#1a1a2e')
+        win2.grab_set()
+        tk.Label(win2, text="¿Qué versiones quieres exportar en lote?", fg='white', bg='#1a1a2e', font=('Arial',10,'bold')).pack(pady=10)
+        
+        modes = ['Normal','PRO (Estudio)','Masterizada (Radio)','Podcast / Radio','Lo-Fi / Vintage','Sped-Up (Viral)','Slowed + Reverb']
+        vars_dict = {}
+        for m in modes:
+            v = tk.BooleanVar(value=(m in self.active_export_profiles))
+            vars_dict[m] = v
+            tk.Checkbutton(win2, text=m, variable=v, fg='white', bg='#1a1a2e', selectcolor='#0f3460', activebackground='#1a1a2e', activeforeground='white').pack(anchor='w', padx=40, pady=2)
+            
+        def _save():
+            selected = [m for m, v in vars_dict.items() if v.get()]
+            if not selected:
+                messagebox.showinfo("Error", "Selecciona al menos 1 modo."); return
+            self.active_export_profiles = selected
+            self.profile_btn.config(text=f"⚙️ Elegir ({len(selected)})")
+            win2.destroy()
+            
+        self._btn(win2, "Guardar Selección", _save, '#e94560', font=('Arial',10,'bold')).pack(pady=15)
+
     def _build_matcher_tab(self, parent):
 
         # ╔══════════════════════════════════════════════════╗
@@ -723,7 +749,7 @@ class App:
         tk.Label(row1, text="🎛️ Perfil:", fg='#a8a8b3', bg='#0f3460',
                  font=('Arial',9)).pack(side='left')
         ttk.Combobox(row1, textvariable=self.mix_profile,
-                     values=['Normal','PRO (Estudio)','Masterizada (Radio)'],
+                     values=['Normal','PRO (Estudio)','Masterizada (Radio)','Podcast / Radio','Lo-Fi / Vintage','Sped-Up (Viral)','Slowed + Reverb'],
                      width=18, state='readonly', font=('Arial',8)
                      ).pack(side='left', padx=4)
         tk.Label(row1, text="   ", bg='#0f3460').pack(side='left')
@@ -821,8 +847,7 @@ class App:
                   font=('Arial',8,'bold'), padx=6, pady=2).pack(side='left', padx=2)
         self._btn(fvb, "✕ Limpiar", lambda: self._match_clear('voz'), '#555',
                   font=('Arial',8,'bold'), padx=6, pady=2).pack(side='left', padx=2)
-        self.match_voz_lb = tk.Listbox(pv, bg='#16213e', fg='#a8a8b3', height=5,
-                                        font=('Courier',8), height=7,
+        self.match_voz_lb = tk.Listbox(pv, bg='#16213e', fg='#a8a8b3', height=5, font=('Courier',8),
                                         selectbackground='#e94560', selectmode='extended')
         self.match_voz_lb.pack(fill='both', expand=True, padx=6, pady=(0,2))
         self.match_voz_lb.bind('<Delete>', lambda e: self._match_remove('voz'))
@@ -845,8 +870,7 @@ class App:
                   font=('Arial',8,'bold'), padx=6, pady=2).pack(side='left', padx=2)
         self._btn(fbb, "✕ Limpiar", lambda: self._match_clear('beat'), '#555',
                   font=('Arial',8,'bold'), padx=6, pady=2).pack(side='left', padx=2)
-        self.match_beat_lb = tk.Listbox(pb, bg='#16213e', fg='#a8a8b3', height=5,
-                                         font=('Courier',8), height=7,
+        self.match_beat_lb = tk.Listbox(pb, bg='#16213e', fg='#a8a8b3', height=5, font=('Courier',8),
                                          selectbackground='#e94560', selectmode='extended')
         self.match_beat_lb.pack(fill='both', expand=True, padx=6, pady=(0,2))
         self.match_beat_lb.bind('<Delete>', lambda e: self._match_remove('beat'))
@@ -2064,8 +2088,16 @@ Professional mix, radio ready."
         _log(f"   🎛️ Perfil activo: {profile}")
         
         pitch_filter = ''
+        # Modificadores de Velocidad
+        if 'Sped-Up' in profile:
+            atempo_str = self._build_atempo_chain(1.25)
+            pitch_filter = 'rubberband=pitch=1.2,'
+        elif 'Slowed' in profile:
+            atempo_str = self._build_atempo_chain(0.85)
+            pitch_filter = 'rubberband=pitch=0.85,'
+            
         if 'PRO' in profile or 'Masterizada' in profile:
-            if vocals.get('key_idx') is not None and beat.get('key_idx') is not None:
+            if vocals.get('key_idx') is not None and beat.get('key_idx') is not None and 'Sped-Up' not in profile and 'Slowed' not in profile:
                 diff = (vocals['key_idx'] - beat['key_idx'])
                 if diff > 6: diff -= 12
                 elif diff < -6: diff += 12
@@ -2087,7 +2119,12 @@ Professional mix, radio ready."
         vol_clone = vol_clone_override if vol_clone_override is not None else 0.3
 
         gentle_chain = ''
-        if 'PRO' in profile or 'Masterizada' in profile:
+        if 'Slowed' in profile:
+            gentle_chain += 'aecho=0.8:0.88:60:0.5,'
+        if 'Podcast' in profile:
+            gentle_chain += 'highpass=f=100,deesser=s=s,acompressor=threshold=0.1:ratio=3:attack=5:release=50:makeup=1.5,'
+            vol_beat = 0.15
+        elif 'PRO' in profile or 'Masterizada' in profile:
             gentle_chain += 'aecho=0.8:0.88:40:0.3,'
             gentle_chain += 'acompressor=threshold=0.1:ratio=4:attack=5:release=50:makeup=1.5:knee=2.5,'
         else:
@@ -2145,7 +2182,11 @@ Professional mix, radio ready."
             else:
                 master_routing = '[beat_raw][voz]amix=inputs=2:duration=longest[mix];'
 
-        if 'Masterizada' in profile:
+        if 'Lo-Fi' in profile:
+            master_fx = 'highpass=f=200,lowpass=f=4000,acompressor=threshold=0.3:ratio=3:attack=10:release=100:makeup=1.5:knee=5,alimiter=limit=0.95:attack=3:release=20'
+        elif 'Podcast' in profile:
+            master_fx = 'highpass=f=80,lowpass=f=12000,acompressor=threshold=0.15:ratio=3:attack=5:release=50:makeup=2.0:knee=2.5,alimiter=limit=0.95:attack=2:release=15,loudnorm=I=-14:LRA=7:TP=-1'
+        elif 'Masterizada' in profile or 'Sped-Up' in profile or 'Slowed' in profile:
             master_fx = 'highpass=f=40,lowpass=f=16000,acompressor=threshold=0.15:ratio=4:attack=5:release=50:makeup=2.5:knee=2.5,equalizer=f=80:width_type=o:width=1.5:g=3,equalizer=f=4000:width_type=o:width=2:g=2.5,alimiter=limit=0.95:attack=2:release=15,loudnorm=I=-12:LRA=7:TP=-1'
         else:
             master_fx = 'highpass=f=40,lowpass=f=16000,acompressor=threshold=0.4:ratio=3:attack=8:release=80:makeup=1.2:knee=6,equalizer=f=80:width_type=o:width=1:g=2,equalizer=f=3000:width_type=o:width=2:g=1.5,equalizer=f=8000:width_type=o:width=2:g=1,alimiter=limit=0.95:attack=3:release=20,loudnorm=I=-14:LRA=9:TP=-1'
@@ -3222,7 +3263,7 @@ Professional mix, radio ready."
         
         tk.Label(ctrl_f, text="Perfil:", fg='white', bg='#0f3460').pack(side='left')
         mix_profile_var = tk.StringVar(value=self.mix_profile.get() if hasattr(self, 'mix_profile') else 'Normal')
-        cb = ttk.Combobox(ctrl_f, textvariable=mix_profile_var, values=['Normal', 'PRO', 'Masterizada'], width=12, state='readonly')
+        cb = ttk.Combobox(ctrl_f, textvariable=mix_profile_var, values=['Normal','PRO','Masterizada','Podcast','Lo-Fi','Sped-Up','Slowed'], width=12, state='readonly')
         cb.pack(side='left', padx=5)
         
         clone_var = tk.BooleanVar(value=False)
