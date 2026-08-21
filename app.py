@@ -703,28 +703,62 @@ class App:
 
     def _open_profile_selector(self):
         win2 = tk.Toplevel(self.root)
-        win2.title("Modos de Exportación")
-        win2.geometry("300x320")
+        win2.title("Configuración de Exportación Múltiple")
+        win2.geometry("400x480")
         win2.configure(bg='#1a1a2e')
         win2.grab_set()
-        tk.Label(win2, text="¿Qué versiones quieres exportar en lote?", fg='white', bg='#1a1a2e', font=('Arial',10,'bold')).pack(pady=10)
         
-        modes = ['Normal','PRO (Estudio)','Masterizada (Radio)','Podcast / Radio','Lo-Fi / Vintage','Sped-Up (Viral)','Slowed + Reverb']
-        vars_dict = {}
-        for m in modes:
+        tk.Label(win2, text="1. PERFIL BASE (Elige uno o varios)", fg='#00ff88', bg='#1a1a2e', font=('Arial',10,'bold')).pack(pady=(10,5), anchor='w', padx=20)
+        
+        base_modes = ['Normal', 'PRO (Estudio)', 'Masterizada (Radio)', 'Podcast / Radio', 'Lo-Fi / Vintage']
+        tips = {
+            'Normal': 'Mezcla básica sin alterar mucho el sonido original.',
+            'PRO (Estudio)': 'Aplica auto-afinación y sidechain para que la voz no se tape.',
+            'Masterizada (Radio)': 'Volumen brutal al estándar de Spotify/TikTok (-12 LUFS).',
+            'Podcast / Radio': 'Ideal si solo hablan. Baja el beat al mínimo y da claridad a la voz.',
+            'Lo-Fi / Vintage': 'Estilo retro, corta agudos, suena como cassette o radio antigua.'
+        }
+        
+        vars_base = {}
+        for m in base_modes:
+            f = tk.Frame(win2, bg='#1a1a2e')
+            f.pack(fill='x', padx=30, pady=2)
             v = tk.BooleanVar(value=(m in self.active_export_profiles))
-            vars_dict[m] = v
-            tk.Checkbutton(win2, text=m, variable=v, fg='white', bg='#1a1a2e', selectcolor='#0f3460', activebackground='#1a1a2e', activeforeground='white').pack(anchor='w', padx=40, pady=2)
+            vars_base[m] = v
+            cb = tk.Checkbutton(f, text=m, variable=v, fg='white', bg='#1a1a2e', selectcolor='#0f3460', activebackground='#1a1a2e', activeforeground='white')
+            cb.pack(side='left')
+            btn = tk.Button(f, text="❓", bg='#333', fg='white', font=('Arial', 7), relief='flat', command=lambda txt=tips[m]: messagebox.showinfo("Tip", txt))
+            btn.pack(side='right')
+            
+        tk.Label(win2, text="2. MODIFICADORES VIRALES (Generan copias extra)", fg='#4da6ff', bg='#1a1a2e', font=('Arial',10,'bold')).pack(pady=(15,5), anchor='w', padx=20)
+        
+        speed_modes = ['+ Sped-Up (Rápido)', '+ Slowed (Lento y Reverb)']
+        speed_tips = {
+            '+ Sped-Up (Rápido)': 'Genera una copia extra acelerada (Nightcore). Ideal para que el audio se vuelva viral rápido.',
+            '+ Slowed (Lento y Reverb)': 'Genera una copia extra lenta con eco espacial. Ideal para videos aesthetic o tristes.'
+        }
+        
+        vars_speed = {}
+        for m in speed_modes:
+            f = tk.Frame(win2, bg='#1a1a2e')
+            f.pack(fill='x', padx=30, pady=2)
+            v = tk.BooleanVar(value=(m in self.active_export_profiles))
+            vars_speed[m] = v
+            cb = tk.Checkbutton(f, text=m, variable=v, fg='#4da6ff', bg='#1a1a2e', selectcolor='#0f3460', activebackground='#1a1a2e', activeforeground='white')
+            cb.pack(side='left')
+            btn = tk.Button(f, text="❓", bg='#333', fg='white', font=('Arial', 7), relief='flat', command=lambda txt=speed_tips[m]: messagebox.showinfo("Tip", txt))
+            btn.pack(side='right')
             
         def _save():
-            selected = [m for m, v in vars_dict.items() if v.get()]
-            if not selected:
-                messagebox.showinfo("Error", "Selecciona al menos 1 modo."); return
+            selected = [m for m, v in vars_base.items() if v.get()]
+            selected += [m for m, v in vars_speed.items() if v.get()]
+            if not any(vars_base.values()):
+                messagebox.showinfo("Error", "Debes seleccionar al menos 1 Perfil Base."); return
             self.active_export_profiles = selected
-            self.profile_btn.config(text=f"⚙️ Elegir ({len(selected)})")
+            self.profile_btn.config(text=f"⚙️ Config ({len(selected)})")
             win2.destroy()
             
-        self._btn(win2, "Guardar Selección", _save, '#e94560', font=('Arial',10,'bold')).pack(pady=15)
+        self._btn(win2, "Guardar Selección", _save, '#e94560', font=('Arial',10,'bold')).pack(pady=20)
 
     def _build_matcher_tab(self, parent):
 
