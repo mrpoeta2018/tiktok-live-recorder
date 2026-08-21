@@ -75,6 +75,21 @@ def _find_ffmpeg():
 
 FFMPEG = _find_ffmpeg()
 
+def _find_ffplay():
+    import shutil, os
+    f = shutil.which('ffplay')
+    if f: return f
+    winget = os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\WinGet\Packages')
+    if os.path.exists(winget):
+        for root, dirs, files in os.walk(winget):
+            for f_name in files:
+                if f_name.lower() == 'ffplay.exe':
+                    return os.path.join(root, f_name)
+    return 'ffplay'
+
+FFPLAY_EXE = _find_ffplay()
+
+
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "artists.json")
 
 # ═══════════════════════════════════════════════════════════
@@ -104,6 +119,7 @@ class App:
         self.proc_beat_file       = tk.StringVar()
         self.proc_output_dir      = tk.StringVar(value=os.path.join(os.path.expanduser("~"), "TikTok_Lives"))
         self.proc_detect_segments = tk.BooleanVar(value=True)
+        self.proc_remove_silence = tk.BooleanVar(value=False)
         self.proc_separate_voz = tk.BooleanVar(value=True)
         self.proc_mix_beat     = tk.BooleanVar(value=True)
         self.proc_running      = False
@@ -653,12 +669,28 @@ class App:
                        fg='white', bg='#1a1a2e', selectcolor='#16213e',
                        font=('Arial',10), activebackground='#1a1a2e',
                        activeforeground='white').pack(anchor='w', pady=2)
+
+        tk.Checkbutton(f2,
+                       text="✂️  Eliminar silencios automáticamente (une las partes donde hablas en 1 solo archivo)",
+                       variable=self.proc_remove_silence,
+                       fg='white', bg='#1a1a2e', selectcolor='#16213e',
+                       font=('Arial',10), activebackground='#1a1a2e',
+                       activeforeground='white').pack(anchor='w', pady=2)
+
         tk.Checkbutton(f2,
                        text="🎤   Separar voz del fondo con Demucs IA — elimina copyright del live",
                        variable=self.proc_separate_voz,
                        fg='white', bg='#1a1a2e', selectcolor='#16213e',
                        font=('Arial',10), activebackground='#1a1a2e',
                        activeforeground='white').pack(anchor='w', pady=2)
+
+        tk.Checkbutton(f2,
+                       text="✂️  Eliminar silencios automáticamente (une las partes donde hablas en 1 solo archivo)",
+                       variable=self.proc_remove_silence,
+                       fg='white', bg='#1a1a2e', selectcolor='#16213e',
+                       font=('Arial',10), activebackground='#1a1a2e',
+                       activeforeground='white').pack(anchor='w', pady=2)
+
 
         hint = tk.Frame(parent, bg='#16213e'); hint.pack(fill='x', padx=14, pady=(4,0))
         tk.Label(hint,
@@ -786,6 +818,10 @@ class App:
                      values=['Normal','PRO (Estudio)','Masterizada (Radio)','Podcast / Radio','Lo-Fi / Vintage','Sped-Up (Viral)','Slowed + Reverb'],
                      width=18, state='readonly', font=('Arial',8)
                      ).pack(side='left', padx=4)
+        tk.Label(row1, text="   ", bg='#0f3460').pack(side='left')
+        tk.Label(row1, text="💾 Formato:", fg='#a8a8b3', bg='#0f3460', font=('Arial',9)).pack(side='left')
+        self.mix_export_format = tk.StringVar(value="WAV")
+        ttk.Combobox(row1, textvariable=self.mix_export_format, values=['WAV', 'MP3'], width=5, state='readonly', font=('Arial',8)).pack(side='left', padx=4)
         tk.Label(row1, text="   ", bg='#0f3460').pack(side='left')
         tk.Checkbutton(row1, text="📝 Transcribir letra",
                        variable=self.proc_transcribe,
@@ -1079,7 +1115,7 @@ class App:
             if sel:
                 self.proc_input_file.set(
                     os.path.join(folder, lb.get(sel[0])))
-                win.destroy()
+                import subprocess; subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW); win.destroy()
         self._btn(win, "Seleccionar", select, '#e94560').pack(pady=5)
 
     def _pick_from_desktop(self):
@@ -1135,7 +1171,7 @@ class App:
                 match = [f for f in files if os.path.basename(f) == name]
                 if match:
                     self.proc_beat_file.set(match[0])
-                win.destroy()
+                import subprocess; subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW); win.destroy()
         self._btn(win, "Seleccionar beat", select, '#e94560').pack(pady=8)
 
     # ── PROCESAMIENTO PRINCIPAL ──────────────────────────────
@@ -1353,6 +1389,8 @@ class App:
         win.geometry("820x450")
         win.configure(bg='#1a1a2e')
         win.grab_set()
+        win.protocol('WM_DELETE_WINDOW', lambda: [subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)), win.destroy()])
+        win.protocol('WM_DELETE_WINDOW', lambda: [subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)), win.destroy()])
 
         tk.Label(win, text="✂️ Escucha el archivo y selecciona qué parte extraer", fg='#e94560', bg='#1a1a2e', font=('Arial', 12, 'bold')).pack(pady=5)
         
@@ -1505,8 +1543,12 @@ class App:
             state['play_start_sec'] = state['start']
             state['play_start_t'] = time.time()
             
-            cmd = [FFMPEG.replace('ffmpeg','ffplay'), '-nodisp', '-autoexit', '-ss', str(state['start']), '-t', str(state['end'] - state['start']), filepath]
-            state['play_proc'] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            cmd = [FFPLAY_EXE, '-nodisp', '-autoexit', '-ss', str(state['start']), '-t', str(state['end'] - state['start']), filepath]
+            try:
+                import subprocess
+                state['play_proc'] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+            except Exception as e:
+                status_lbl.config(text=f'❌ Error ffplay: {e}')
             _update_playhead()
             play_btn.config(text="⏸ Pausar")
 
@@ -1522,8 +1564,12 @@ class App:
                 state['paused'] = False
                 state['play_start_sec'] = state['paused_sec']
                 state['play_start_t'] = time.time()
-                cmd = [FFMPEG.replace('ffmpeg','ffplay'), '-nodisp', '-autoexit', '-ss', str(state['play_start_sec']), '-t', str(state['end'] - state['play_start_sec']), filepath]
-                state['play_proc'] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                cmd = [FFPLAY_EXE, '-nodisp', '-autoexit', '-ss', str(state['start']), '-t', str(state['end'] - state['start']), filepath]
+                try:
+                    import subprocess
+                    state['play_proc'] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+                except Exception as e:
+                    status_lbl.config(text=f'❌ Error ffplay: {e}')
                 _update_playhead()
                 play_btn.config(text="⏸ Pausar")
             else:
@@ -1560,7 +1606,7 @@ class App:
                     self.proc_trim_lbl.config(text=" Recorte: Archivo completo", fg='#a8a8b3')
                 except: pass
                 
-            win.destroy()
+            import subprocess; subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW); win.destroy()
 
         def _load_audio_thread():
             try:
@@ -1581,7 +1627,7 @@ class App:
                 self.root.after(0, lambda: t_end.insert(0, f"{state['end']:.2f}"))
                 self.root.after(0, _draw_waveform_canvas)
             except Exception as e:
-                self.root.after(0, lambda: status_lbl.config(text=f"❌ Error al cargar onda: {e}"))
+                self.root.after(0, lambda err=e: status_lbl.config(text=f"❌ Error: {err}"))
 
         import threading
         threading.Thread(target=_load_audio_thread, daemon=True).start()
@@ -1752,7 +1798,7 @@ class App:
 
                 if self.proc_tag_mp3.get():
                     self._tag_mp3(mp3, title, artist, genre, bpm_val, year, lyrics)
-                    self.proc_log_write(f"   🏷️ ID3 → \"{title}\" / {artist} / {genre}")
+                    self.proc_log_write(f"   🏷️ ID3 → \'{title}' / {artist} / {genre}")
 
                 if self.proc_gen_proof.get():
                     proof = self._generate_proof(vf, mp3, title, artist, lyrics,
@@ -2354,6 +2400,8 @@ Professional mix, radio ready."
         win.geometry("420x280")
         win.configure(bg='#1a1a2e')
         win.grab_set()
+        win.protocol('WM_DELETE_WINDOW', lambda: [subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)), win.destroy()])
+        win.protocol('WM_DELETE_WINDOW', lambda: [subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)), win.destroy()])
 
         tk.Label(win, text="Títulos sugeridos (elegí uno o escribí el tuyo):",
                  fg='#a8a8b3', bg='#1a1a2e', font=('Arial',9)).pack(pady=(12,4))
@@ -2378,13 +2426,15 @@ Professional mix, radio ready."
             else:
                 sel = lb.curselection()
                 if sel: self.proc_song_title.set(lb.get(sel[0]))
-            win.destroy()
+            import subprocess; subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW); win.destroy()
 
         self._btn(win, "✓ Usar este título", apply, '#e94560',
                   font=('Arial',10,'bold')).pack(pady=8)
 
     def _tag_mp3(self, mp3_file, title, artist, genre, bpm, year, lyrics):
         """Embebe metadatos ID3 en el MP3 usando mutagen."""
+        if not str(mp3_file).lower().endswith(".mp3"):
+            return
         try:
             from mutagen.mp3 import MP3
             from mutagen.id3 import (ID3, TIT2, TPE1, TALB, TCON, TBPM,
@@ -2672,10 +2722,17 @@ Professional mix, radio ready."
         artist_str = artist if artist else ''
         by_str     = f" by {artist_str}" if artist_str and artist_str != 'Artista' else ''
 
+        # Extract lyric theme
+        stopwords = {'esto','como','pero','para','este','esta','todo','nada','algo','solo','cuando','donde','quien','porque','desde','hacia','hasta','sobre','entre'}
+        meaningful_words = [w for w in words if w not in stopwords and len(w) > 3]
+        from collections import Counter
+        top_words = [w[0] for w in Counter(meaningful_words).most_common(3)]
+        lyric_theme = f"incorporating subtle visual metaphors of {', '.join(top_words)}" if top_words else "focused on the artist's vibe"
+
         # Prompt 1 — portada fotorrealista
         p1 = (
             f"Spotify album cover for the song '{title_str}'{by_str}, "
-            f"{visual}, {mood} atmosphere, Spanish urban rapper authentic portrait, "
+            f"{visual}, {mood} atmosphere, {lyric_theme}, Spanish urban rapper authentic portrait, "
             f"professional worldwide hit cover, square 1:1 format, "
             f"cinematic lighting, ultra HD 4K. No text, no logos, no watermarks."
         )
@@ -2683,7 +2740,7 @@ Professional mix, radio ready."
         # Prompt 2 — portada abstracta / arte gráfico
         p2 = (
             f"Spotify cover art for '{title_str}'{by_str}, "
-            f"abstract graphic design, {key} key color palette, "
+            f"abstract graphic design {lyric_theme}, {key} key color palette, "
             f"{tempo_feel}, {mood} energy, modern minimalist, "
             f"square 1:1, ultra HD. No text, no logos."
         )
@@ -2994,6 +3051,8 @@ Professional mix, radio ready."
         win.geometry("640x560")
         win.configure(bg='#1a1a2e')
         win.grab_set()
+        win.protocol('WM_DELETE_WINDOW', lambda: [subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)), win.destroy()])
+        win.protocol('WM_DELETE_WINDOW', lambda: [subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)), win.destroy()])
 
         # ── Header ──
         hdr = tk.Frame(win, bg='#0f3460', pady=10); hdr.pack(fill='x')
@@ -3050,7 +3109,7 @@ Professional mix, radio ready."
         bf2 = tk.Frame(win, bg='#0f3460', pady=8); bf2.pack(fill='x', side='bottom')
 
         def _mix(pairs_list):
-            win.destroy()
+            import subprocess; subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW); win.destroy()
             self._do_batch_mix(pairs_list)
 
         if good:
@@ -3135,6 +3194,8 @@ Professional mix, radio ready."
         win.geometry("540x400")
         win.configure(bg='#1a1a2e')
         win.grab_set()
+        win.protocol('WM_DELETE_WINDOW', lambda: [subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)), win.destroy()])
+        win.protocol('WM_DELETE_WINDOW', lambda: [subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)), win.destroy()])
 
         hdr = tk.Frame(win, bg='#0f3460', pady=10); hdr.pack(fill='x')
         tk.Label(hdr, text=f"⚡  Mezclar {label}",
@@ -3161,7 +3222,7 @@ Professional mix, radio ready."
         bf = tk.Frame(win, bg='#0f3460', pady=8); bf.pack(fill='x', side='bottom')
 
         def _go():
-            win.destroy()
+            import subprocess; subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW); win.destroy()
             self._do_batch_mix(pairs_to_mix)
 
         self._btn(bf, f"⚡ Mezclar {len(pairs_to_mix)} pares", _go, '#1a6b3a',
@@ -3189,7 +3250,8 @@ Professional mix, radio ready."
                 # ── Subcarpeta por par ─────────────────────────
                 pair_dir = os.path.join(session, f"{i:02d}_{score}pct_{vname[:20]}")
                 os.makedirs(pair_dir, exist_ok=True)
-                out_f = os.path.join(pair_dir, f"FINAL_{vname[:18]}+{bname[:18]}.mp3")
+                ext = getattr(self, 'mix_export_format', tk.StringVar(value='wav')).get().lower()
+                out_f = os.path.join(pair_dir, f"FINAL_{vname[:18]}+{bname[:18]}.{ext}")
 
                 self.root.after(0, lambda n=p['voz']['name'], ii=i:
                     self.match_mix_status.config(text=f"🎵 {ii}/{len(pairs)}: {n[:35]}"))
@@ -3203,7 +3265,7 @@ Professional mix, radio ready."
                     fail += 1
                     self.root.after(0, lambda v=i: self.match_bar.config(value=v))
                     continue
-                self.matcher_log_write(f"      ✅ FINAL.mp3")
+                self.matcher_log_write(f"      ✅ FINAL.{ext}")
                 ok += 1
 
                 # ── Transcripción → Letra ─────────────────────
@@ -3211,7 +3273,7 @@ Professional mix, radio ready."
                 lyrics_text, bpm_val, key_val = '', None, '?'
                 if self.proc_transcribe.get():
                     self.matcher_log_write(f"      📝 Transcribiendo FINAL.mp3...")
-                    result = self._transcribe_audio(out_f, pair_dir, vname[:18], ts,
+                    result = self._transcribe_audio(p['voz']['file'], pair_dir, vname[:18], ts,
                                                     log_fn=self.matcher_log_write)
                     if result:
                         lyrics_text, bpm_val, key_val = result
@@ -3229,11 +3291,11 @@ Professional mix, radio ready."
 
                 # ── Renombrar MP3 con el título real ──────────
                 safe = self._safe_filename(title)
-                named_f = os.path.join(pair_dir, f"{safe}.mp3")
+                named_f = os.path.join(pair_dir, f"{safe}.{ext}")
                 try:
                     os.rename(out_f, named_f)
                     out_f = named_f
-                    self.matcher_log_write(f"      💾 {safe}.mp3")
+                    self.matcher_log_write(f"      💾 {safe}.{ext}")
                 except Exception:
                     pass  # si falla el rename, out_f sigue como FINAL_...mp3
 
@@ -3241,7 +3303,7 @@ Professional mix, radio ready."
                 brand_f = self.proc_brand_file.get().strip()
                 if brand_f and os.path.exists(brand_f):
                     branded_name = self._safe_filename(f"{title} Branding")
-                    branded = os.path.join(pair_dir, f"{branded_name}.mp3")
+                    branded = os.path.join(pair_dir, f"{branded_name}.{ext}")
                     if self._add_brand_to_file(out_f, branded):
                         self.matcher_log_write(f"      🎙️ {branded_name}.mp3")
 
@@ -3255,7 +3317,7 @@ Professional mix, radio ready."
                 # ── ID3 Tags ──────────────────────────────────
                 if self.proc_tag_mp3.get():
                     self._tag_mp3(out_f, title, artist, genre, bpm_val, year, lyrics_text)
-                    self.matcher_log_write(f"      🏷️ ID3: \"{title}\"")
+                    self.matcher_log_write(f"      🏷️ ID3: \'{title}'")
 
                 # ── Autoría / prueba hash ─────────────────────
                 if self.proc_gen_proof.get():
@@ -3287,6 +3349,8 @@ Professional mix, radio ready."
         win.geometry("1000x640")
         win.configure(bg='#1a1a2e')
         win.grab_set()
+        win.protocol('WM_DELETE_WINDOW', lambda: [subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)), win.destroy()])
+        win.protocol('WM_DELETE_WINDOW', lambda: [subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)), win.destroy()])
 
         hdr = tk.Frame(win, bg='#0f3460', pady=5)
         hdr.pack(fill='x')
@@ -3506,7 +3570,7 @@ Professional mix, radio ready."
                 self.root.after(0, lambda: _draw_waveforms())
                 self.root.after(0, lambda: status_lbl.config(text="✅ Listo. Hacé zoom, seleccioná, ajustá y dale a Play."))
             except Exception as e:
-                self.root.after(0, lambda: status_lbl.config(text=f"❌ Error visual: {e}"))
+                self.root.after(0, lambda err=e: status_lbl.config(text=f"❌ Error: {err}"))
 
         threading.Thread(target=_load_audio, daemon=True).start()
         
@@ -3534,14 +3598,16 @@ Professional mix, radio ready."
         def _play(start_offset=0.0):
             import subprocess, time
             if state['play_proc']:
-                subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True)
+                subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000))
                 
             status_lbl.config(text="⏳ Mezclando... (puede tomar unos seg)")
             
             out_dir = os.path.join(os.path.expanduser("~"), ".cache", "tiktok_lives")
             os.makedirs(out_dir, exist_ok=True)
             tmp_out = os.path.join(out_dir, "preview_mix.wav")
-            if os.path.exists(tmp_out): os.remove(tmp_out)
+            if os.path.exists(tmp_out):
+                try: os.remove(tmp_out)
+                except Exception: pass  # Ignore locked file, ffmpeg -y will overwrite it
             
             def _run():
                 prof = mix_profile_var.get()
@@ -3567,7 +3633,7 @@ Professional mix, radio ready."
                 
                 if os.path.exists(tmp_out):
                     self.root.after(0, lambda: status_lbl.config(text=f"▶️ Reproduciendo ({prof})..."))
-                    state['play_proc'] = subprocess.Popen(['ffplay', '-nodisp', '-autoexit', tmp_out])
+                    state['play_proc'] = subprocess.Popen([FFPLAY_EXE, '-nodisp', '-autoexit', tmp_out], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
                     state['playing'] = True
                     state['paused'] = False
                     state['play_start_t'] = time.time()
@@ -3584,7 +3650,7 @@ Professional mix, radio ready."
                 state['paused_sec'] = state['play_start_sec'] + (time.time() - state['play_start_t'])
                 state['paused'] = True
                 if state['play_proc']:
-                    subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True)
+                    subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000))
                 status_lbl.config(text="⏸️ Pausado")
             elif state['paused']:
                 _play(start_offset=state['paused_sec'])
@@ -3594,11 +3660,12 @@ Professional mix, radio ready."
             state['paused'] = False
             cv.delete("playhead")
             import subprocess
-            subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True)
+            subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000))
             status_lbl.config(text="⏹️ Detenido")
 
         def _export():
             _stop()
+            exp_btn.config(state='disabled', text='⌛ Exportando...')
             pauta_file = None
             if hasattr(self, 'pauta_cb') and self.pauta_cb.get():
                 pauta_file = os.path.join(os.path.expanduser("~"), "TikTok_Lives", "Pautas", self.pauta_cb.get())
@@ -3618,11 +3685,12 @@ Professional mix, radio ready."
             vn = os.path.splitext(os.path.basename(pair['voz']['name']))[0][:15]
             bn = os.path.splitext(os.path.basename(pair['beat']['name']))[0][:15]
             ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-            final_out = os.path.join(out_dir, f"FINAL_{vn}_{bn}_{ts}.mp3")
+            ext = getattr(self, 'mix_export_format', tk.StringVar(value='wav')).get().lower()
+            final_out = os.path.join(out_dir, f'FINAL_{vn}_{bn}_{ts}.{ext}')
             
             def _run_exp():
                 self._mix_with_beat(
-                    pair, None, final_out, log_fn=lambda x: None, 
+                    pair, None, final_out, log_fn=self.matcher_log_write, 
                     preview_only=False, clone_voice=clone, override_profile=prof,
                     harmony_voice=harm, vol_voz_override=v_voz, vol_beat_override=v_beat,
                     vol_clone_override=v_clo, pauta_file=pauta_file
@@ -3630,14 +3698,18 @@ Professional mix, radio ready."
                 if os.path.exists(final_out):
                     if getattr(self, 'proc_transcribe', None) and self.proc_transcribe.get():
                         self.root.after(0, lambda: status_lbl.config(text="⏳ Transcribiendo voz y generando IA (puede tardar)..."))
-                        res = self._transcribe_audio(final_out, out_dir, vn, ts, log_fn=lambda x: None)
+                        res = self._transcribe_audio(pair['voz']['file'], out_dir, vn, ts, log_fn=lambda x: None)
                         if res and getattr(self, 'proc_img_prompt', None) and self.proc_img_prompt.get():
                             self._generate_image_prompt(res[0], res[1], res[2], out_dir, vn, ts, log_fn=lambda x: None)
                     
                     self.root.after(0, lambda: messagebox.showinfo("Exportación Exitosa", f"Tu mezcla y documentos se han guardado en:\n{out_dir}"))
                     self.root.after(0, lambda: status_lbl.config(text=f"✅ Guardado en: {final_out}"))
+                    self.root.after(0, lambda: exp_btn.config(state="normal", text="💾 Exportar Mix Final"))
+                    self.root.after(0, lambda: exp_btn.config(state='normal', text="💾 Exportar Mix Final"))
                 else:
                     self.root.after(0, lambda: status_lbl.config(text="❌ Error al exportar"))
+                    self.root.after(0, lambda: exp_btn.config(state="normal", text="💾 Exportar Mix Final"))
+                    self.root.after(0, lambda: exp_btn.config(state='normal', text="💾 Exportar Mix Final"))
                     
             threading.Thread(target=_run_exp, daemon=True).start()
 
@@ -3664,7 +3736,13 @@ Professional mix, radio ready."
         self.pauta_btn.pack(side='left', padx=5)
         self.root.after(0, lambda: self._refresh_pautas_cb(self.pauta_cb))
         
-        self._btn(act_f, "💾 Exportar Mix Final", _export, '#533483', font=('Arial',10,'bold')).pack(side='left', padx=5)
+        # Local format selector linked to global
+        if not hasattr(self, 'mix_export_format'): self.mix_export_format = tk.StringVar(value='WAV')
+        tk.Label(act_f, text="Formato:", fg='white', bg='#1a1a2e', font=('Arial',9)).pack(side='left', padx=(5,2))
+        ttk.Combobox(act_f, textvariable=self.mix_export_format, values=['WAV', 'MP3'], width=5, state='readonly', font=('Arial',9)).pack(side='left', padx=(0,10))
+        
+        exp_btn = self._btn(act_f, "💾 Exportar Mix Final", _export, '#533483', font=('Arial',10,'bold'))
+        exp_btn.pack(side='left', padx=5)
         self._btn(act_f, "✕ Cerrar", lambda: [_stop(), win.destroy()], '#333', font=('Arial',10,'bold')).pack(side='left', padx=5)
 
     def _refresh_pautas_cb(self, cb):
@@ -3735,6 +3813,8 @@ Professional mix, radio ready."
         win.geometry("820x400")
         win.configure(bg='#1a1a2e')
         win.grab_set()
+        win.protocol('WM_DELETE_WINDOW', lambda: [subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)), win.destroy()])
+        win.protocol('WM_DELETE_WINDOW', lambda: [subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)), win.destroy()])
 
         tk.Label(win, text="✂️ Recorte Visual (con Zoom y Playhead)", fg='#e94560', bg='#1a1a2e', font=('Arial', 12, 'bold')).pack(pady=5)
         
@@ -3892,7 +3972,7 @@ Professional mix, radio ready."
                 self.root.after(0, lambda: t_end.insert(0, f"{dur:.2f}"))
                 self.root.after(0, _draw_waveform_canvas)
             except Exception as e:
-                self.root.after(0, lambda: status_lbl.config(text=f"❌ Error: {e}"))
+                self.root.after(0, lambda err=e: status_lbl.config(text=f"❌ Error: {err}"))
 
         threading.Thread(target=_load_audio, daemon=True).start()
         
@@ -3929,7 +4009,7 @@ Professional mix, radio ready."
             
             state['paused'] = False
             import time
-            state['play_proc'] = subprocess.Popen(['ffplay', '-nodisp', '-autoexit', '-ss', str(s), '-t', str(duracion), filepath])
+            state['play_proc'] = subprocess.Popen([FFPLAY_EXE, '-nodisp', '-autoexit', '-ss', str(s), '-t', str(duracion), filepath], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
             state['playing'] = True
             state['play_start_t'] = time.time()
             state['play_start_sec'] = s
@@ -3939,14 +4019,14 @@ Professional mix, radio ready."
             if not state['playing']: return
             state['playing'] = False
             state['paused'] = True
-            subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True)
+            subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000))
             
         def _stop_playback(clear_playhead=True):
             state['playing'] = False
             state['paused'] = False
             state['paused_sec'] = 0.0
             if clear_playhead: cv.delete("playhead")
-            subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True)
+            subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000))
 
         f1 = tk.Frame(win, bg='#1a1a2e'); f1.pack(pady=5)
         self._btn(f1, "▶️ Escuchar", _play_selection, '#1a6b3a', font=('Arial',10,'bold')).pack(side='left', padx=5)
@@ -3971,7 +4051,7 @@ Professional mix, radio ready."
             ext = os.path.splitext(filepath)[1]
             out_f = os.path.join(os.path.dirname(filepath), custom_name + ext)
             
-            win.destroy()
+            import subprocess; subprocess.run(['taskkill', '/F', '/IM', 'ffplay.exe'], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW); win.destroy()
             self.match_mix_status.config(text=f"⏳ Recortando audio ({duracion:.1f}s)...")
             def _cut():
                 subprocess.run([FFMPEG, '-i', filepath, '-ss', s, '-t', str(duracion), '-c', 'copy', out_f, '-y'], capture_output=True)
