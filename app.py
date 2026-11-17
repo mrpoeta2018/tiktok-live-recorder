@@ -1263,7 +1263,7 @@ class App:
                 self.proc_log_write("🎤 Paso 3/3: Separando voz (Demucs htdemucs_ft)...")
                 _cache = os.path.join(os.path.expanduser("~"), ".cache", "torch", "hub", "checkpoints")
                 if not (os.path.isdir(_cache) and any(
-                        f.startswith("htdemucs_ft") for f in os.listdir(_cache))):
+                        f.endswith(".th") for f in os.listdir(_cache))):
                     self.proc_log_write("   ⏬ Primera vez: descargando modelo IA (~200MB)...")
                 for i, seg in enumerate(segments):
                     label = f"seg{i+1:03d}"
